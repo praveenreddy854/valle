@@ -19,13 +19,22 @@ Connect the Pi ground to the L298N ground. Power the motors from a separate moto
 
 ## Install on Raspberry Pi
 
+Install a GPIO backend for `gpiozero`:
+
+```bash
+sudo apt update
+sudo apt install -y python3-lgpio
+```
+
 ```bash
 cd /home/pi/valle
-python3 -m venv .venv
+python3 -m venv --system-site-packages .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-VALLE_DRIVER=gpiozero python -m valle.app
+GPIOZERO_PIN_FACTORY=lgpio VALLE_DRIVER=gpiozero python3 -m valle.app
 ```
+
+If you already created the virtual environment without `--system-site-packages`, recreate it or install `lgpio` inside the virtual environment with `pip install lgpio`.
 
 The server listens on port `8080` by default.
 

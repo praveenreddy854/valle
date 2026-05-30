@@ -34,23 +34,29 @@ class GpioZeroMotorDriver:
 
     def __init__(self, config: ValleConfig) -> None:
         try:
-            from gpiozero import Motor
+            from gpiozero import DigitalOutputDevice, PWMOutputDevice
         except ImportError as exc:
             raise RuntimeError(
                 "gpiozero is not installed. Install requirements.txt on the Raspberry Pi."
             ) from exc
 
-        self._left = Motor(
-            forward=config.left_forward_pin,
-            backward=config.left_backward_pin,
-            enable=config.left_enable_pin,
-            pwm=True,
+        self._left = _L298NMotor(
+            forward_device=DigitalOutputDevice(
+                config.left_forward_pin, initial_value=False
+            ),
+            backward_device=DigitalOutputDevice(
+                config.left_backward_pin, initial_value=False
+            ),
+            enable_device=PWMOutputDevice(config.left_enable_pin, initial_value=0.0),
         )
-        self._right = Motor(
-            forward=config.right_forward_pin,
-            backward=config.right_backward_pin,
-            enable=config.right_enable_pin,
-            pwm=True,
+        self._right = _L298NMotor(
+            forward_device=DigitalOutputDevice(
+                config.right_forward_pin, initial_value=False
+            ),
+            backward_device=DigitalOutputDevice(
+                config.right_backward_pin, initial_value=False
+            ),
+            enable_device=PWMOutputDevice(config.right_enable_pin, initial_value=0.0),
         )
         self.stop()
 
@@ -78,6 +84,46 @@ class GpioZeroMotorDriver:
         self.stop()
         self._left.close()
         self._right.close()
+
+
+class _L298NMotor:
+    def __init__(
+        self,
+        *,
+        forward_device: object,
+        backward_device: object,
+        enable_device: object,
+    ) -> None:
+        self._forward = forward_device
+        self._backward = backward_device
+        self._enable = enable_device
+
+    def forward(self, speed: float) -> None:
+        self._drive(forward=True, speed=speed)
+
+    def backward(self, speed: float) -> None:
+        self._drive(forward=False, speed=speed)
+
+    def stop(self) -> None:
+        self._enable.value = 0.0
+        self._forward.off()
+        self._backward.off()
+
+    def close(self) -> None:
+        self.stop()
+        self._enable.close()
+        self._forward.close()
+        self._backward.close()
+
+    def _drive(self, *, forward: bool, speed: float) -> None:
+        self._enable.value = 0.0
+        if forward:
+            self._backward.off()
+            self._forward.on()
+        else:
+            self._forward.off()
+            self._backward.on()
+        self._enable.value = speed
 
 
 @dataclass
