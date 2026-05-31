@@ -103,6 +103,9 @@ VALLE_DRIVER=mock python -m valle.app
 | `VALLE_DEFAULT_SPEED_PERCENT` | `60` |
 | `VALLE_DEFAULT_DURATION_SECONDS` | `5` |
 | `VALLE_MAX_DURATION_SECONDS` | `5` |
+| `VALLE_TURN_DURATION_SECONDS` | `0.25` |
+| `VALLE_AUTOPILOT_MAX_SECONDS` | `1800` |
+| `VALLE_AUTOPILOT_IDLE_SECONDS` | `20` |
 | `VALLE_LEFT_FORWARD_PIN` | `5` |
 | `VALLE_LEFT_BACKWARD_PIN` | `6` |
 | `VALLE_LEFT_ENABLE_PIN` | `12` |
@@ -111,3 +114,86 @@ VALLE_DRIVER=mock python -m valle.app
 | `VALLE_RIGHT_ENABLE_PIN` | `13` |
 
 Before testing on the floor, lift the car so the wheels can spin freely and verify `/stop` works.
+
+## Autopilot (off-device brain)
+
+Autopilot runs as a **separate service on a more powerful machine** (e.g., a Mac mini). The Pi only owns the session, the safety watchdogs, and the motors. The brain pulls MJPEG frames from the Pi, runs monocular depth, and sends drive commands back inside an `/autopilot` session.
+
+See `docs/adr/0001-reflex-uses-depth-not-object-detection.md` for why perception is depth-based rather than object-detection-based.
+
+### Pi side: camera streamer
+
+A separate process exposes the Pi camera as MJPEG so the streaming connection cannot block the motor controller:
+
+```bash
+sudo apt install -y python3-picamera2
+VALLE_CAMERA_PORT=8081 python3 -m valle.camera
+```
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_CAMERA_HOST` | `0.0.0.0` |
+| `VALLE_CAMERA_PORT` | `8081` |
+| `VALLE_CAMERA_WIDTH` | `640` |
+| `VALLE_CAMERA_HEIGHT` | `480` |
+| `VALLE_CAMERA_FPS` | `10` |
+
+Stream URL: `http://rpi.local:8081/stream.mjpg`.
+
+### Pi side: autopilot endpoints
+
+While a session is active, all Siri-facing endpoints (`/forward`, `/left`, …) return `409` — only `/stop` is still honored as a panic button (and ends the session).
+
+```text
+POST /autopilot/start
+   body (optional): {"max_seconds": 1800, "idle_seconds": 20}
+   201 {"session_id": "<token>", "max_seconds": ..., "idle_seconds": ..., "started_at": ...}
+   409 if a session is already active
+
+POST /autopilot/<session_id>/drive
+   body: {"direction": "forward"|"backward"|"left"|"right", "duration": 0.3, "speed": 60}
+   200 {"ok": true, ...session telemetry}
+   409 if the session is not active
+
+POST /autopilot/<session_id>/stop
+   body (optional): {"reason": "manual"|"blind"}
+   200 {"ok": true, "ended_reason": "autopilot_<reason>"}
+```
+
+The session ends automatically:
+
+- After `VALLE_AUTOPILOT_MAX_SECONDS` (hard cap).
+- After `VALLE_AUTOPILOT_IDLE_SECONDS` with no `forward` or `backward` command (idle watchdog — pivoting in place does not count as progress).
+- On `/stop` from any source.
+
+### Mac side: install and run the brain
+
+On the Mac (or any non-Pi host):
+
+```bash
+cd valle
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .[brain]
+
+export VALLE_PI_BASE_URL=http://rpi.local:8080
+export VALLE_CAMERA_URL=http://rpi.local:8081/stream.mjpg
+python -m valle.brain
+```
+
+On first run the Depth Anything V2 Small model is downloaded from Hugging Face (~50 MB).
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_PI_BASE_URL` | `http://rpi.local:8080` |
+| `VALLE_CAMERA_URL` | `http://rpi.local:8081/stream.mjpg` |
+| `VALLE_BRAIN_TICK_HZ` | `4` |
+| `VALLE_BRAIN_GRACE_SECONDS` | `2` |
+| `VALLE_DEPTH_MODEL` | `depth-anything/Depth-Anything-V2-Small-hf` |
+| `VALLE_DEPTH_DEVICE` | `auto` (uses MPS on Apple Silicon, else CPU) |
+| `VALLE_BLOCKED_THRESHOLD` | `0.55` |
+| `VALLE_HYSTERESIS_MARGIN` | `0.05` |
+| `VALLE_PULSE_FORWARD` / `VALLE_PULSE_TURN` / `VALLE_PULSE_BACKWARD` | `0.30` / `0.20` / `0.30` |
+| `VALLE_SPEED_FORWARD` / `VALLE_SPEED_TURN` / `VALLE_SPEED_BACKWARD` | `55` / `55` / `45` |
+
+The thresholds and pulse durations almost certainly need tuning on the bench — start with the wheels off the ground.

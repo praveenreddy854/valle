@@ -8,7 +8,11 @@ from typing import Any
 from flask import Flask, jsonify, request
 
 from .config import ValleConfig
-from .controller import ValleController
+from .controller import (
+    SessionAlreadyActiveError,
+    SessionNotActiveError,
+    ValleController,
+)
 from .motors import MotorDriver, create_motor_driver
 
 
@@ -41,6 +45,8 @@ def create_app(
             default_duration_seconds=config.default_duration_seconds,
             max_duration_seconds=config.max_duration_seconds,
             default_turn_duration_seconds=config.turn_duration_seconds,
+            autopilot_max_seconds=config.autopilot_max_seconds,
+            autopilot_idle_seconds=config.autopilot_idle_seconds,
         )
 
     app = Flask(__name__)
@@ -74,6 +80,53 @@ def create_app(
             methods=["GET", "POST"],
         )
 
+    @app.post("/autopilot/start")
+    def autopilot_start() -> Any:
+        try:
+            max_seconds = _optional_float("max_seconds")
+            idle_seconds = _optional_float("idle_seconds")
+            result = controller.start_autopilot(
+                max_seconds=max_seconds, idle_seconds=idle_seconds
+            )
+        except SessionAlreadyActiveError as exc:
+            return _error(
+                "autopilot session already active",
+                status=409,
+                extra={"session_id": exc.session_id},
+            )
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        return jsonify(result), 201
+
+    @app.post("/autopilot/<session_id>/drive")
+    def autopilot_drive(session_id: str) -> Any:
+        direction = _request_value("direction")
+        if not direction:
+            return _error("Missing direction.", status=400)
+        try:
+            speed = _optional_float("speed")
+            duration = _optional_float("duration")
+            result = controller.autopilot_drive(
+                session_id,
+                direction=direction,
+                duration_seconds=duration,
+                speed_percent=speed,
+            )
+        except SessionNotActiveError:
+            return _error("session not active", status=409)
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        return jsonify({"ok": True, **result})
+
+    @app.post("/autopilot/<session_id>/stop")
+    def autopilot_stop(session_id: str) -> Any:
+        reason = _request_value("reason") or "manual"
+        try:
+            controller.stop_autopilot(session_id, reason=str(reason))
+        except SessionNotActiveError:
+            return _error("session not active", status=409)
+        return jsonify({"ok": True, "ended_reason": "autopilot_" + str(reason)})
+
     return app
 
 
@@ -99,6 +152,12 @@ def _handle_command(controller: ValleController, command: str) -> Any:
         speed = _optional_float("speed")
         duration = _optional_float("duration")
         result = controller.run(command, speed_percent=speed, duration_seconds=duration)
+    except SessionAlreadyActiveError as exc:
+        return _error(
+            "autopilot session active",
+            status=409,
+            extra={"session_id": exc.session_id},
+        )
     except ValueError as exc:
         return _error(str(exc), status=400)
     return jsonify(result)
@@ -124,8 +183,13 @@ def _request_value(name: str) -> Any:
     return None
 
 
-def _error(message: str, *, status: int) -> tuple[Any, int]:
-    return jsonify({"ok": False, "error": message}), status
+def _error(
+    message: str, *, status: int, extra: dict[str, Any] | None = None
+) -> tuple[Any, int]:
+    payload: dict[str, Any] = {"ok": False, "error": message}
+    if extra:
+        payload.update(extra)
+    return jsonify(payload), status
 
 
 def _register_shutdown(controller: ValleController) -> None:

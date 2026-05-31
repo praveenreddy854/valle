@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "valle"
+version = "0.1.0"
+description = "Raspberry Pi robotic car webhook service plus off-device autopilot brain."
+requires-python = ">=3.10"
+dependencies = [
+  "Flask>=3.0,<4",
+]
+
+[project.optional-dependencies]
+# Raspberry Pi runtime dependencies for motor control.
+gpio = ["gpiozero>=2.0,<3"]
+# Mac-side autopilot brain dependencies.
+brain = [
+  "requests>=2.31",
+  "numpy>=1.26",
+  "opencv-python>=4.9",
+  "Pillow>=10.0",
+  "torch>=2.2",
+  "transformers>=4.40",
+]
+
+[tool.setuptools.packages.find]
+include = ["valle*"]

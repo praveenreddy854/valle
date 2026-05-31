@@ -22,6 +22,8 @@ class ValleConfig:
     default_duration_seconds: float = 5.0
     max_duration_seconds: float = 5.0
     turn_duration_seconds: float = 0.25
+    autopilot_max_seconds: float = 1800.0
+    autopilot_idle_seconds: float = 20.0
 
     @classmethod
     def from_env(cls) -> "ValleConfig":
@@ -46,6 +48,12 @@ class ValleConfig:
             ),
             turn_duration_seconds=_env_float(
                 "VALLE_TURN_DURATION_SECONDS", cls.turn_duration_seconds
+            ),
+            autopilot_max_seconds=_env_float(
+                "VALLE_AUTOPILOT_MAX_SECONDS", cls.autopilot_max_seconds
+            ),
+            autopilot_idle_seconds=_env_float(
+                "VALLE_AUTOPILOT_IDLE_SECONDS", cls.autopilot_idle_seconds
             ),
         )
 
