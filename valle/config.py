@@ -21,6 +21,7 @@ class ValleConfig:
     default_speed_percent: float = 60.0
     default_duration_seconds: float = 5.0
     max_duration_seconds: float = 5.0
+    turn_duration_seconds: float = 0.25
 
     @classmethod
     def from_env(cls) -> "ValleConfig":
@@ -42,6 +43,9 @@ class ValleConfig:
             ),
             max_duration_seconds=_env_float(
                 "VALLE_MAX_DURATION_SECONDS", cls.max_duration_seconds
+            ),
+            turn_duration_seconds=_env_float(
+                "VALLE_TURN_DURATION_SECONDS", cls.turn_duration_seconds
             ),
         )
 

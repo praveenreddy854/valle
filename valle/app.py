@@ -40,6 +40,7 @@ def create_app(
             default_speed_percent=config.default_speed_percent,
             default_duration_seconds=config.default_duration_seconds,
             max_duration_seconds=config.max_duration_seconds,
+            default_turn_duration_seconds=config.turn_duration_seconds,
         )
 
     app = Flask(__name__)
@@ -114,8 +115,8 @@ def _optional_float(name: str) -> float | None:
 
 
 def _request_value(name: str) -> Any:
-    if name in request.args:
-        return request.args.get(name)
+    if name in request.values:
+        return request.values.get(name)
 
     body = request.get_json(silent=True)
     if isinstance(body, dict):

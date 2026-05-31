@@ -48,11 +48,13 @@ class ValleController:
         default_speed_percent: float = 60.0,
         default_duration_seconds: float = 5.0,
         max_duration_seconds: float = 5.0,
+        default_turn_duration_seconds: float = 0.25,
     ) -> None:
         self._driver = driver
         self._default_speed_percent = default_speed_percent
         self._default_duration_seconds = default_duration_seconds
         self._max_duration_seconds = max_duration_seconds
+        self._default_turn_duration_seconds = default_turn_duration_seconds
         self._lock = threading.RLock()
         self._timer: threading.Timer | None = None
         self._sequence = 0
@@ -76,9 +78,13 @@ class ValleController:
             return self.stop(reason="manual")
 
         speed = clamp(speed_percent, default=self._default_speed_percent, low=0.0, high=100.0)
+        if duration_seconds is None and normalized in ("left", "right"):
+            default_duration = self._default_turn_duration_seconds
+        else:
+            default_duration = self._default_duration_seconds
         duration = clamp(
             duration_seconds,
-            default=self._default_duration_seconds,
+            default=default_duration,
             low=0.0,
             high=self._max_duration_seconds,
         )
