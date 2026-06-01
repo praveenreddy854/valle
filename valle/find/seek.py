@@ -133,7 +133,17 @@ class SeekLoop:
                     break
 
                 action = self._reflex_action(frame.image, policy)
-                self._send_drive(session_id, action)
+                tick_seconds = time.monotonic() - now
+                ok = self._send_drive(session_id, action)
+                log.info(
+                    "tick %d action=%s detections=%d top_score=%.2f tick=%.2fs%s",
+                    ticks,
+                    action,
+                    len(detections),
+                    max((d["score"] for d in detections), default=0.0),
+                    tick_seconds,
+                    "" if ok else " (drive failed)",
+                )
                 ticks += 1
                 self._sleep_remainder(now, tick_interval)
         finally:
@@ -163,12 +173,16 @@ class SeekLoop:
             return False
 
     def _action_params(self, action: str) -> tuple[float, float]:
+        # All actions use the same long pulse during seek so motion is
+        # continuous across ticks - each tick refreshes the live command,
+        # the previous one is overwritten before it expires.
+        duration = self._find.seek_pulse_seconds
         if action == FORWARD:
-            return self._brain.pulse_forward, self._brain.speed_forward
+            return duration, self._brain.speed_forward
         if action == BACKWARD:
-            return self._brain.pulse_backward, self._brain.speed_backward
+            return duration, self._brain.speed_backward
         if action in (LEFT, RIGHT):
-            return self._brain.pulse_turn, self._brain.speed_turn
+            return duration, self._brain.speed_turn
         raise ValueError(f"unknown action: {action}")
 
     @staticmethod

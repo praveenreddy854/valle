@@ -18,6 +18,11 @@ class FindConfig:
 
     seek_found_score: float = 0.20
     seek_default_max_seconds: float = 60.0
+    # Per-action drive duration during seek. Set close to the Pi's
+    # VALLE_MAX_DURATION_SECONDS (default 5s) so motors run continuously
+    # while we re-send each tick. The Pi's per-command timer is the
+    # safety net if the brain dies mid-seek.
+    seek_pulse_seconds: float = 4.0
 
     @classmethod
     def from_env(cls) -> "FindConfig":
@@ -36,6 +41,9 @@ class FindConfig:
             ),
             seek_default_max_seconds=_env_float(
                 "VALLE_SEEK_DEFAULT_MAX_SECONDS", cls.seek_default_max_seconds
+            ),
+            seek_pulse_seconds=_env_float(
+                "VALLE_SEEK_PULSE_SECONDS", cls.seek_pulse_seconds
             ),
         )
 

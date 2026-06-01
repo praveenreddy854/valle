@@ -259,5 +259,6 @@ curl "http://rpi.local:8080/seek?object=toy&max_seconds=30"
 | `VALLE_SEEK_TIMEOUT_BUFFER_SECONDS` | `10` | Pi (extra HTTP wait beyond max_seconds) |
 | `VALLE_SEEK_FOUND_SCORE` | `0.20` | Mac (confidence required to count as found) |
 | `VALLE_SEEK_DEFAULT_MAX_SECONDS` | `60` | Mac (used when request omits max_seconds) |
+| `VALLE_SEEK_PULSE_SECONDS` | `4.0` | Mac (long-pulse duration refreshed every tick so motion is continuous; must be ≤ Pi's `VALLE_MAX_DURATION_SECONDS`) |
 
 Seek requires `make find` to be running on the Mac (it loads OWLv2) **and** that the existing autopilot brain stack is installed (it shares depth + reflex code with `make brain`). You do not need to run `make brain` at the same time as `make find`; `/seek` starts and ends its own autopilot session over the same Pi API.
