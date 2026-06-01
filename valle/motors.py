@@ -60,21 +60,24 @@ class GpioZeroMotorDriver:
         )
         self.stop()
 
+    # Motor leads are physically wired with reversed polarity, so what the
+    # L298N considers "forward" rotates the wheels in the opposite direction.
+    # Inverted at the driver level rather than rewiring the connectors.
     def forward(self, speed: float) -> None:
-        self._left.forward(speed)
-        self._right.forward(speed)
+        self._left.backward(speed)
+        self._right.backward(speed)
 
     def backward(self, speed: float) -> None:
-        self._left.backward(speed)
-        self._right.backward(speed)
-
-    def turn_left(self, speed: float) -> None:
-        self._left.backward(speed)
+        self._left.forward(speed)
         self._right.forward(speed)
 
-    def turn_right(self, speed: float) -> None:
+    def turn_left(self, speed: float) -> None:
         self._left.forward(speed)
         self._right.backward(speed)
+
+    def turn_right(self, speed: float) -> None:
+        self._left.backward(speed)
+        self._right.forward(speed)
 
     def stop(self) -> None:
         self._left.stop()
