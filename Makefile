@@ -12,7 +12,7 @@ help:
 	@echo "Mac:"
 	@echo "  make brain        Run autopilot brain"
 	@echo "  make find         Run object-find server"
-	@echo "  make install-brain  Create .venv and install brain extras (needs python3.12+)"
+	@echo "  make install-brain  Create .venv and install brain extras"
 	@echo ""
 	@echo "Either:"
 	@echo "  make test         Run unit tests"
@@ -46,6 +46,6 @@ install-pi:
 	.venv/bin/pip install -r requirements.txt
 
 install-brain:
-	python3.12 -m venv .venv
+	python3 -m venv .venv
 	.venv/bin/pip install --upgrade pip
 	.venv/bin/pip install -e '.[brain]'
