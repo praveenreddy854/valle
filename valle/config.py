@@ -24,6 +24,7 @@ class ValleConfig:
     turn_duration_seconds: float = 0.25
     autopilot_max_seconds: float = 1800.0
     autopilot_idle_seconds: float = 20.0
+    find_timeout_seconds: float = 10.0
 
     @classmethod
     def from_env(cls) -> "ValleConfig":
@@ -54,6 +55,9 @@ class ValleConfig:
             ),
             autopilot_idle_seconds=_env_float(
                 "VALLE_AUTOPILOT_IDLE_SECONDS", cls.autopilot_idle_seconds
+            ),
+            find_timeout_seconds=_env_float(
+                "VALLE_FIND_TIMEOUT_SECONDS", cls.find_timeout_seconds
             ),
         )
 

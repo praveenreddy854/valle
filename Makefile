@@ -11,6 +11,7 @@ help:
 	@echo ""
 	@echo "Mac:"
 	@echo "  make brain        Run autopilot brain"
+	@echo "  make find         Run object-find server"
 	@echo "  make install-brain  Create .venv and install brain extras (needs python3.12+)"
 	@echo ""
 	@echo "Either:"
@@ -26,6 +27,9 @@ camera:
 
 brain:
 	$(PY) -m valle.brain
+
+find:
+	$(PY) -m valle.find
 
 test:
 	$(PY) -m unittest discover tests -v

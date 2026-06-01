@@ -9,6 +9,7 @@ description = "Raspberry Pi robotic car webhook service plus off-device autopilo
 requires-python = ">=3.10"
 dependencies = [
   "Flask>=3.0,<4",
+  "flask-sock>=0.7,<1",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +18,7 @@ gpio = ["gpiozero>=2.0,<3"]
 # Mac-side autopilot brain dependencies.
 brain = [
   "requests>=2.31",
+  "websocket-client>=1.7",
   "numpy>=1.26",
   "opencv-python>=4.9",
   "Pillow>=10.0",

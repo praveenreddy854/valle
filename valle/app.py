@@ -7,6 +7,12 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
+from .bridge import (
+    BrainBridge,
+    BrainOfflineError,
+    BrainResponseError,
+    BrainTimeoutError,
+)
 from .config import ValleConfig
 from .controller import (
     SessionAlreadyActiveError,
@@ -51,6 +57,9 @@ def create_app(
 
     app = Flask(__name__)
     app.config["VALLE_CONTROLLER"] = controller
+    bridge = BrainBridge()
+    app.config["VALLE_BRAIN_BRIDGE"] = bridge
+    _register_brain_bridge(app, bridge, config)
 
     @app.get("/health")
     def health() -> Any:
@@ -127,7 +136,46 @@ def create_app(
             return _error("session not active", status=409)
         return jsonify({"ok": True, "ended_reason": "autopilot_" + str(reason)})
 
+    @app.get("/find")
+    def find() -> Any:
+        object_query = _request_value("object")
+        if not object_query:
+            return _error("Missing object. Use /find?object=toy.", status=400)
+        try:
+            result = bridge.find(
+                object_query=str(object_query),
+                timeout_seconds=config.find_timeout_seconds,
+            )
+        except BrainOfflineError:
+            return _error("brain offline", status=503)
+        except BrainTimeoutError:
+            return _error("brain timed out", status=504)
+        except BrainResponseError as exc:
+            return _error(str(exc), status=502)
+        return jsonify(result)
+
     return app
+
+
+def _register_brain_bridge(app: Flask, bridge: BrainBridge, config: ValleConfig) -> None:
+    try:
+        from flask_sock import Sock
+    except ImportError:
+        return
+
+    sock = Sock(app)
+
+    @sock.route("/brain/find")
+    def brain_find(ws: Any) -> None:
+        bridge.attach(ws)
+        try:
+            while True:
+                message = ws.receive()
+                if message is None:
+                    break
+                bridge.handle_response(message)
+        finally:
+            bridge.detach(ws)
 
 
 def main() -> None:

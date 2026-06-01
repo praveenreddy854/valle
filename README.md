@@ -197,3 +197,37 @@ On first run the Depth Anything V2 Small model is downloaded from Hugging Face (
 | `VALLE_SPEED_FORWARD` / `VALLE_SPEED_TURN` / `VALLE_SPEED_BACKWARD` | `55` / `55` / `45` |
 
 The thresholds and pulse durations almost certainly need tuning on the bench — start with the wheels off the ground.
+
+## Object find (off-device)
+
+A second off-device service answers text-queried object lookups. It dials a WebSocket into the Pi and stays connected; the Pi exposes `/find?object=<text>` and proxies the request over that socket. The Mac is never directly addressable.
+
+On the Mac:
+
+```bash
+make find
+```
+
+On any client (Siri Shortcut, curl, browser):
+
+```bash
+curl "http://rpi.local:8080/find?object=toy"
+# {"id":"...","type":"find_result","object":"toy","found":true,
+#  "results":[{"score":0.42,"label":"toy","box":{"xmin":...}}],
+#  "capture_seconds":0.34}
+
+# When the find service is not running on the Mac:
+# 503 {"ok":false,"error":"brain offline"}
+```
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_PI_WS_URL` | `ws://rpi.local:8080/brain/find` |
+| `VALLE_CAMERA_URL` | `http://rpi.local:8081/stream.mjpg` |
+| `VALLE_DETECTOR_MODEL` | `google/owlv2-base-patch16-ensemble` |
+| `VALLE_DETECTOR_DEVICE` | `auto` |
+| `VALLE_SCORE_THRESHOLD` | `0.10` |
+| `VALLE_MAX_RESULTS` | `5` |
+| `VALLE_FIND_TIMEOUT_SECONDS` | `10` (Pi-side; how long the Pi waits for a brain response) |
+
+`make find` runs independently of `make brain` (autopilot). You can run both, just one, or neither.
