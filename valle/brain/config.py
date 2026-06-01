@@ -11,7 +11,7 @@ class BrainConfig:
 
     tick_hz: float = 4.0
     grace_seconds: float = 2.0
-    request_timeout_seconds: float = 1.0
+    request_timeout_seconds: float = 3.0
 
     session_max_seconds: float | None = None
     session_idle_seconds: float | None = None
