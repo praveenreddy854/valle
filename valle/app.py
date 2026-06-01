@@ -161,6 +161,11 @@ def _register_brain_bridge(app: Flask, bridge: BrainBridge, config: ValleConfig)
     try:
         from flask_sock import Sock
     except ImportError:
+        app.logger.warning(
+            "flask-sock is not installed; /brain/find WebSocket route disabled "
+            "and /find will always return 503. Install with: "
+            "pip install -r requirements.txt"
+        )
         return
 
     sock = Sock(app)
