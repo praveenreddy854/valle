@@ -63,6 +63,32 @@ class BrainBridge:
             pending.response.put(message)
 
     def find(self, *, object_query: str, timeout_seconds: float) -> dict[str, Any]:
+        return self.request(
+            request_type="find",
+            payload={"object": object_query},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def seek(
+        self,
+        *,
+        object_query: str,
+        max_seconds: float,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        return self.request(
+            request_type="seek",
+            payload={"object": object_query, "max_seconds": max_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def request(
+        self,
+        *,
+        request_type: str,
+        payload: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
         with self._lock:
             ws = self._ws
             if ws is None:
@@ -71,11 +97,9 @@ class BrainBridge:
             pending = _Pending(response=queue.Queue(maxsize=1))
             self._pending[message_id] = pending
 
-        payload = json.dumps(
-            {"id": message_id, "type": "find", "object": object_query}
-        )
+        body = {"id": message_id, "type": request_type, **payload}
         try:
-            ws.send(payload)
+            ws.send(json.dumps(body))
         except Exception as exc:
             with self._lock:
                 self._pending.pop(message_id, None)

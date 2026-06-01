@@ -10,18 +10,31 @@ import cv2
 import numpy as np
 import websocket
 
+from ..brain.config import BrainConfig
+from ..brain.depth import DepthEstimator
 from .config import FindConfig
 from .detector import Detector
+from .seek import SeekLoop
 
 
 log = logging.getLogger("valle.find")
 
 
 class FindServer:
-    def __init__(self, config: FindConfig, *, detector: Detector) -> None:
+    def __init__(
+        self,
+        config: FindConfig,
+        *,
+        detector: Detector,
+        brain_config: BrainConfig,
+        depth: DepthEstimator,
+    ) -> None:
         self._config = config
         self._detector = detector
+        self._brain_config = brain_config
+        self._depth = depth
         self._stop_requested = False
+        self._seek: SeekLoop | None = None
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -69,8 +82,14 @@ class FindServer:
         except json.JSONDecodeError:
             log.warning("ignoring non-JSON message: %r", raw)
             return None
-        if message.get("type") != "find":
-            return None
+        message_type = message.get("type")
+        if message_type == "find":
+            return self._handle_find(message)
+        if message_type == "seek":
+            return self._handle_seek(message)
+        return None
+
+    def _handle_find(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = message.get("id")
         query = message.get("object")
         if not isinstance(message_id, str) or not isinstance(query, str):
@@ -95,6 +114,37 @@ class FindServer:
             "capture_seconds": capture_seconds,
         }
 
+    def _handle_seek(self, message: dict[str, Any]) -> dict[str, Any]:
+        message_id = message.get("id")
+        query = message.get("object")
+        max_seconds_raw = message.get("max_seconds")
+        if not isinstance(message_id, str) or not isinstance(query, str):
+            return {"id": message_id, "error": "malformed seek request"}
+        max_seconds = (
+            float(max_seconds_raw)
+            if isinstance(max_seconds_raw, (int, float))
+            else self._config.seek_default_max_seconds
+        )
+
+        try:
+            seek = self._seek_loop()
+            result = seek.run(object_query=query, max_seconds=max_seconds)
+        except Exception as exc:
+            log.exception("seek failed")
+            return {"id": message_id, "error": f"seek failed: {exc}"}
+
+        return {"id": message_id, "type": "seek_result", **result}
+
+    def _seek_loop(self) -> SeekLoop:
+        if self._seek is None:
+            self._seek = SeekLoop(
+                brain_config=self._brain_config,
+                find_config=self._config,
+                detector=self._detector,
+                depth=self._depth,
+            )
+        return self._seek
+
     def _capture_one(self) -> tuple[np.ndarray | None, float]:
         log.debug("capturing one frame from %s", self._config.camera_url)
         started = time.monotonic()
@@ -112,13 +162,17 @@ class FindServer:
 
 def build_server(config: FindConfig | None = None) -> FindServer:
     config = config or FindConfig.from_env()
+    brain_config = BrainConfig.from_env()
     detector = Detector(
         config.detector_model,
         config.detector_device,
         score_threshold=config.score_threshold,
         max_results=config.max_results,
     )
-    return FindServer(config, detector=detector)
+    depth = DepthEstimator(brain_config.depth_model, brain_config.depth_device)
+    return FindServer(
+        config, detector=detector, brain_config=brain_config, depth=depth
+    )
 
 
 def main() -> None:

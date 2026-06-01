@@ -16,6 +16,9 @@ class FindConfig:
 
     reconnect_seconds: float = 3.0
 
+    seek_found_score: float = 0.20
+    seek_default_max_seconds: float = 60.0
+
     @classmethod
     def from_env(cls) -> "FindConfig":
         return cls(
@@ -27,6 +30,12 @@ class FindConfig:
             max_results=_env_int("VALLE_MAX_RESULTS", cls.max_results),
             reconnect_seconds=_env_float(
                 "VALLE_RECONNECT_SECONDS", cls.reconnect_seconds
+            ),
+            seek_found_score=_env_float(
+                "VALLE_SEEK_FOUND_SCORE", cls.seek_found_score
+            ),
+            seek_default_max_seconds=_env_float(
+                "VALLE_SEEK_DEFAULT_MAX_SECONDS", cls.seek_default_max_seconds
             ),
         )
 

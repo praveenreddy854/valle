@@ -109,6 +109,40 @@ class BrainBridgeTest(unittest.TestCase):
         self.assertTrue(first.closed)
         self.assertFalse(second.closed)
 
+    def test_seek_dispatches_seek_typed_message(self) -> None:
+        bridge = BrainBridge()
+        ws = FakeWebSocket()
+        bridge.attach(ws)
+        result_box: dict = {}
+
+        def caller() -> None:
+            result_box["value"] = bridge.seek(
+                object_query="toy", max_seconds=30, timeout_seconds=2.0
+            )
+
+        thread = threading.Thread(target=caller)
+        thread.start()
+        for _ in range(100):
+            if ws.sent:
+                break
+            threading.Event().wait(0.01)
+        request = json.loads(ws.sent[0])
+        self.assertEqual(request["type"], "seek")
+        self.assertEqual(request["object"], "toy")
+        self.assertEqual(request["max_seconds"], 30)
+        bridge.handle_response(
+            json.dumps(
+                {
+                    "id": request["id"],
+                    "type": "seek_result",
+                    "found": True,
+                    "score": 0.5,
+                }
+            )
+        )
+        thread.join(timeout=2.0)
+        self.assertTrue(result_box["value"]["found"])
+
 
 if __name__ == "__main__":
     unittest.main()

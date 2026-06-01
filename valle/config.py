@@ -25,6 +25,8 @@ class ValleConfig:
     autopilot_max_seconds: float = 1800.0
     autopilot_idle_seconds: float = 20.0
     find_timeout_seconds: float = 10.0
+    seek_max_seconds: float = 60.0
+    seek_timeout_buffer_seconds: float = 10.0
 
     @classmethod
     def from_env(cls) -> "ValleConfig":
@@ -58,6 +60,12 @@ class ValleConfig:
             ),
             find_timeout_seconds=_env_float(
                 "VALLE_FIND_TIMEOUT_SECONDS", cls.find_timeout_seconds
+            ),
+            seek_max_seconds=_env_float(
+                "VALLE_SEEK_MAX_SECONDS", cls.seek_max_seconds
+            ),
+            seek_timeout_buffer_seconds=_env_float(
+                "VALLE_SEEK_TIMEOUT_BUFFER_SECONDS", cls.seek_timeout_buffer_seconds
             ),
         )
 

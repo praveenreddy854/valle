@@ -154,6 +154,34 @@ def create_app(
             return _error(str(exc), status=502)
         return jsonify(result)
 
+    @app.get("/seek")
+    def seek() -> Any:
+        object_query = _request_value("object")
+        if not object_query:
+            return _error("Missing object. Use /seek?object=toy.", status=400)
+        try:
+            max_seconds_raw = _optional_float("max_seconds")
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        max_seconds = min(
+            max_seconds_raw if max_seconds_raw is not None else config.seek_max_seconds,
+            config.seek_max_seconds,
+        )
+        timeout = max_seconds + config.seek_timeout_buffer_seconds
+        try:
+            result = bridge.seek(
+                object_query=str(object_query),
+                max_seconds=max_seconds,
+                timeout_seconds=timeout,
+            )
+        except BrainOfflineError:
+            return _error("brain offline", status=503)
+        except BrainTimeoutError:
+            return _error("brain timed out", status=504)
+        except BrainResponseError as exc:
+            return _error(str(exc), status=502)
+        return jsonify(result)
+
     return app
 
 

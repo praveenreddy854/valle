@@ -231,3 +231,33 @@ curl "http://rpi.local:8080/find?object=toy"
 | `VALLE_FIND_TIMEOUT_SECONDS` | `10` (Pi-side; how long the Pi waits for a brain response) |
 
 `make find` runs independently of `make brain` (autopilot). You can run both, just one, or neither.
+
+### `/seek` — drive around until found
+
+`/seek` reuses the same brain (and the same depth + reflex stack the autopilot uses) but adds detection on every tick. The car reflex-drives until either OWLv2 spots the target above the seek threshold or `max_seconds` is reached.
+
+```bash
+curl "http://rpi.local:8080/seek?object=toy"
+# starts an autopilot session, reflex-drives the room, detects every tick
+# {"id":"...","type":"seek_result","object":"toy","found":true,
+#  "score":0.42,"label":"toy","box":{...},
+#  "elapsed_seconds":12.4,"ticks":47,"reason":"found"}
+# or, on timeout:
+# {"id":"...","type":"seek_result","object":"toy","found":false,
+#  "elapsed_seconds":60.0,"ticks":210,"reason":"max_seconds"}
+```
+
+Override the deadline per request (Pi clamps to `VALLE_SEEK_MAX_SECONDS`):
+
+```bash
+curl "http://rpi.local:8080/seek?object=toy&max_seconds=30"
+```
+
+| Environment variable | Default | Lives on |
+| --- | --- | --- |
+| `VALLE_SEEK_MAX_SECONDS` | `60` | Pi (hard cap) |
+| `VALLE_SEEK_TIMEOUT_BUFFER_SECONDS` | `10` | Pi (extra HTTP wait beyond max_seconds) |
+| `VALLE_SEEK_FOUND_SCORE` | `0.20` | Mac (confidence required to count as found) |
+| `VALLE_SEEK_DEFAULT_MAX_SECONDS` | `60` | Mac (used when request omits max_seconds) |
+
+Seek requires `make find` to be running on the Mac (it loads OWLv2) **and** that the existing autopilot brain stack is installed (it shares depth + reflex code with `make brain`). You do not need to run `make brain` at the same time as `make find`; `/seek` starts and ends its own autopilot session over the same Pi API.
