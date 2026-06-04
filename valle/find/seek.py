@@ -56,7 +56,13 @@ class SeekLoop:
             bottom_crop=brain_config.bottom_crop,
         )
 
-    def run(self, *, object_query: str, max_seconds: float) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        object_query: str,
+        max_seconds: float,
+        speed: float | None = None,
+    ) -> dict[str, Any]:
         self._depth.load()
         self._detector.load()
 
@@ -134,7 +140,7 @@ class SeekLoop:
 
                 action = self._reflex_action(frame.image, policy)
                 tick_seconds = time.monotonic() - now
-                ok = self._send_drive(session_id, action)
+                ok = self._send_drive(session_id, action, speed_override=speed)
                 log.info(
                     "tick %d action=%s detections=%d top_score=%.2f tick=%.2fs%s",
                     ticks,
@@ -160,10 +166,12 @@ class SeekLoop:
         strips = reduce_to_strips(depth, self._layout)
         return policy.decide(strips)
 
-    def _send_drive(self, session_id: str, action: str) -> bool:
+    def _send_drive(
+        self, session_id: str, action: str, *, speed_override: float | None = None
+    ) -> bool:
         if action == "stop_pulse":
             return True
-        duration, speed = self._action_params(action)
+        duration, speed = self._action_params(action, speed_override=speed_override)
         try:
             self._client.drive(
                 session_id, direction=action, duration=duration, speed=speed
@@ -172,17 +180,22 @@ class SeekLoop:
         except (requests.RequestException, PiClientError):
             return False
 
-    def _action_params(self, action: str) -> tuple[float, float]:
+    def _action_params(
+        self, action: str, *, speed_override: float | None = None
+    ) -> tuple[float, float]:
         # All actions use the same long pulse during seek so motion is
         # continuous across ticks - each tick refreshes the live command,
         # the previous one is overwritten before it expires.
         duration = self._find.seek_pulse_seconds
         if action == FORWARD:
-            return duration, self._brain.speed_forward
+            speed = self._brain.speed_forward if speed_override is None else speed_override
+            return duration, speed
         if action == BACKWARD:
-            return duration, self._brain.speed_backward
+            speed = self._brain.speed_backward if speed_override is None else speed_override
+            return duration, speed
         if action in (LEFT, RIGHT):
-            return duration, self._brain.speed_turn
+            speed = self._brain.speed_turn if speed_override is None else speed_override
+            return duration, speed
         raise ValueError(f"unknown action: {action}")
 
     @staticmethod

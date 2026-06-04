@@ -118,6 +118,7 @@ class FindServer:
         message_id = message.get("id")
         query = message.get("object")
         max_seconds_raw = message.get("max_seconds")
+        speed_raw = message.get("speed")
         if not isinstance(message_id, str) or not isinstance(query, str):
             return {"id": message_id, "error": "malformed seek request"}
         max_seconds = (
@@ -125,10 +126,13 @@ class FindServer:
             if isinstance(max_seconds_raw, (int, float))
             else self._config.seek_default_max_seconds
         )
+        speed = float(speed_raw) if isinstance(speed_raw, (int, float)) else None
 
         try:
             seek = self._seek_loop()
-            result = seek.run(object_query=query, max_seconds=max_seconds)
+            result = seek.run(
+                object_query=query, max_seconds=max_seconds, speed=speed
+            )
         except Exception as exc:
             log.exception("seek failed")
             return {"id": message_id, "error": f"seek failed: {exc}"}

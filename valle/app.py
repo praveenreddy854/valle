@@ -161,6 +161,7 @@ def create_app(
             return _error("Missing object. Use /seek?object=toy.", status=400)
         try:
             max_seconds_raw = _optional_float("max_seconds")
+            speed = _optional_float("speed")
         except ValueError as exc:
             return _error(str(exc), status=400)
         max_seconds = min(
@@ -173,6 +174,7 @@ def create_app(
                 object_query=str(object_query),
                 max_seconds=max_seconds,
                 timeout_seconds=timeout,
+                speed=speed,
             )
         except BrainOfflineError:
             return _error("brain offline", status=503)

@@ -75,10 +75,14 @@ class BrainBridge:
         object_query: str,
         max_seconds: float,
         timeout_seconds: float,
+        speed: float | None = None,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"object": object_query, "max_seconds": max_seconds}
+        if speed is not None:
+            payload["speed"] = speed
         return self.request(
             request_type="seek",
-            payload={"object": object_query, "max_seconds": max_seconds},
+            payload=payload,
             timeout_seconds=timeout_seconds,
         )
 
