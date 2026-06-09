@@ -136,6 +136,83 @@ def create_app(
             return _error("session not active", status=409)
         return jsonify({"ok": True, "ended_reason": "autopilot_" + str(reason)})
 
+    @app.post("/agent/start")
+    def agent_start() -> Any:
+        try:
+            mission = _agent_mission()
+            max_seconds = _optional_float("max_seconds")
+            idle_seconds = _optional_float("idle_seconds")
+            result = controller.start_agent_session(
+                mission=mission,
+                max_seconds=max_seconds, idle_seconds=idle_seconds
+            )
+        except SessionAlreadyActiveError as exc:
+            return _error(
+                "session already active",
+                status=409,
+                extra={"session_id": exc.session_id},
+            )
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        return jsonify(result), 201
+
+    @app.post("/agent/reflex")
+    def agent_reflex() -> Any:
+        try:
+            left = _required_float("left")
+            center = _required_float("center")
+            right = _required_float("right")
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        source = str(_request_value("source") or "unknown")
+        return jsonify(
+            controller.update_reflex(
+                left=left, center=center, right=right, source=source
+            )
+        )
+
+    @app.post("/agent/<session_id>/intent")
+    def agent_intent(session_id: str) -> Any:
+        intent_type = str(_request_value("type") or "drive_pulse")
+        reason = str(_request_value("reason") or "")
+        if intent_type == "stop":
+            try:
+                result = controller.stop_agent_session(
+                    session_id, reason=reason or "manual"
+                )
+            except SessionNotActiveError:
+                return _error("session not active", status=409)
+            return jsonify({"ok": True, "ended_reason": result["last_stop_reason"]})
+        if intent_type != "drive_pulse":
+            return _error("intent type must be drive_pulse or stop", status=400)
+
+        direction = _request_value("direction")
+        if not direction:
+            return _error("Missing direction.", status=400)
+        try:
+            speed = _optional_float("speed")
+            duration = _optional_float("duration")
+            result = controller.agent_intent(
+                session_id,
+                direction=str(direction),
+                duration_seconds=duration,
+                speed_percent=speed,
+                reason=reason,
+            )
+        except SessionNotActiveError:
+            return _error("session not active", status=409)
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        return jsonify({"ok": True, **result})
+
+    @app.post("/agent/<session_id>/observe")
+    def agent_observe(session_id: str) -> Any:
+        try:
+            result = controller.agent_observe(session_id)
+        except SessionNotActiveError:
+            return _error("session not active", status=409)
+        return jsonify({"ok": True, **result})
+
     @app.get("/find")
     def find() -> Any:
         object_query = _request_value("object")
@@ -254,6 +331,32 @@ def _optional_float(name: str) -> float | None:
         return float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be a number") from exc
+
+
+def _required_float(name: str) -> float:
+    raw = _request_value(name)
+    if raw in (None, ""):
+        raise ValueError(f"{name} is required")
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+
+
+def _agent_mission() -> dict[str, Any]:
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise ValueError("agent mission is required")
+
+    nested = body.get("mission")
+    if isinstance(nested, dict):
+        return dict(nested)
+
+    return {
+        key: value
+        for key, value in body.items()
+        if key not in {"max_seconds", "idle_seconds"}
+    }
 
 
 def _request_value(name: str) -> Any:

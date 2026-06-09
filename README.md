@@ -19,6 +19,9 @@ Connect the Pi ground to the L298N ground. Power the motors from a separate moto
 
 ## Install on Raspberry Pi
 
+Valle requires Python 3.12. If you already have an older `.venv`, recreate it
+with Python 3.12 before running services.
+
 Install a GPIO backend for `gpiozero`:
 
 ```bash
@@ -28,10 +31,10 @@ sudo apt install -y python3-lgpio
 
 ```bash
 cd /home/pi/valle
-python3 -m venv --system-site-packages .venv
+python3.12 -m venv --system-site-packages .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-GPIOZERO_PIN_FACTORY=lgpio VALLE_DRIVER=gpiozero python3 -m valle.app
+GPIOZERO_PIN_FACTORY=lgpio VALLE_DRIVER=gpiozero python -m valle.app
 ```
 
 If you already created the virtual environment without `--system-site-packages`, recreate it or install `lgpio` inside the virtual environment with `pip install lgpio`.
@@ -166,13 +169,153 @@ The session ends automatically:
 - After `VALLE_AUTOPILOT_IDLE_SECONDS` with no `forward` or `backward` command (idle watchdog — pivoting in place does not count as progress).
 - On `/stop` from any source.
 
+### Pi side: agent sessions
+
+Agent sessions are for scheduled inspection jobs such as "check the back door
+lock at 10 PM" or "look for vacuum blockers before the robot vacuum starts."
+The agent plans the mission, but it does not command the motors directly. Each
+movement request is a short **intent** that passes through Valle's reflex gate
+before a motor pulse is executed.
+
+```text
+POST /agent/start
+   body: {
+     "goal": "check the back door lock",
+     "task": "nightly_door_lock_check",
+     "skill": "check_door_locks",
+     "targets": ["back_door"],
+     "max_seconds": 300,
+     "idle_seconds": 20
+   }
+   201 {"session_id": "<token>", "kind": "agent", "mission": {...}, ...}
+
+POST /agent/reflex
+   body: {"left": 0.2, "center": 0.3, "right": 0.4, "source": "depth"}
+   200 {"ok": true, "clearance": {...}}
+
+POST /agent/<session_id>/intent
+   body: {
+     "type": "drive_pulse",
+     "direction": "forward"|"backward"|"left"|"right",
+     "duration": 0.25,
+     "speed": 35,
+     "reason": "approach back door inspection spot"
+   }
+   200 {"ok": true, "executed": true|false, "reflex": {...}, ...}
+
+POST /agent/<session_id>/observe
+   200 {"ok": true, "agent": {...}, "status": {...}, "reflex": {...}}
+
+POST /agent/<session_id>/intent
+   body: {"type": "stop", "reason": "manual"}
+   200 {"ok": true, "ended_reason": "agent_manual"}
+```
+
+If there is no fresh reflex reading, agent movement is vetoed with
+`executed: false`. Forward movement requires a clear center strip, pivot turns
+require the corresponding side strip to be clear, and bounded reverse pulses
+are allowed as an escape action once a fresh reading exists. Manual `/stop`
+still ends the session immediately.
+
+### Mac side: CrewAI agent runner
+
+The agent loop lives off-device in `valle.brain.agent`. It uses CrewAI with
+Azure OpenAI, while Valle's Pi still gates movement through `/agent/*`.
+
+Install the CrewAI agent extra:
+
+```bash
+make install-agent
+```
+
+Valle uses Python 3.12. If `python3.12` is not your default interpreter, pass it
+explicitly:
+
+```bash
+VENV_PY=python3.12 make install-agent
+```
+
+Run a one-off inspection mission:
+
+```bash
+# Fill .env with AZURE_* and VALLE_PI_BASE_URL values.
+.venv/bin/python -m valle.brain.agent "check the back door lock"
+```
+
+Scheduled jobs can pass richer mission metadata:
+
+```dotenv
+VALLE_AGENT_MISSION_JSON='{
+  "goal": "check the back door lock",
+  "task": "nightly_door_lock_check",
+  "skill": "check_door_locks",
+  "targets": ["back_door"],
+  "max_seconds": 300,
+  "idle_seconds": 20
+}'
+```
+
+```bash
+make agent
+```
+
+The runner exposes CrewAI tools for starting a session, observing the Pi status,
+requesting reflex-gated drive pulses, stopping the session, and recording the
+inspection result. It does not call motor endpoints directly.
+
+### Mac side: brain API
+
+The brain can also run as an HTTP API on the Mac:
+
+```bash
+make install-brain-api
+make brain-api
+```
+
+Default URL: `http://127.0.0.1:8090`.
+
+Optional settings:
+
+```dotenv
+VALLE_BRAIN_API_HOST=0.0.0.0
+VALLE_BRAIN_API_PORT=8090
+```
+
+Run a CrewAI agent mission over HTTP:
+
+```bash
+curl -X POST "http://127.0.0.1:8090/agent/run" \
+  -H "content-type: application/json" \
+  -d '{
+    "goal": "check the back door lock",
+    "task": "nightly_door_lock_check",
+    "skill": "check_door_locks",
+    "targets": ["back_door"]
+  }'
+```
+
+Run brain-owned find or seek over HTTP:
+
+```bash
+curl -X POST "http://127.0.0.1:8090/find" \
+  -H "content-type: application/json" \
+  -d '{"object": "toy"}'
+
+curl -X POST "http://127.0.0.1:8090/seek" \
+  -H "content-type: application/json" \
+  -d '{"object": "toy", "max_seconds": 30}'
+```
+
+The brain API is separate from the Pi motor API. Movement still goes through the
+Pi's session and reflex gates.
+
 ### Mac side: install and run the brain
 
 On the Mac (or any non-Pi host):
 
 ```bash
 cd valle
-python3 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -e .[brain]
 
@@ -198,9 +341,9 @@ On first run the Depth Anything V2 Small model is downloaded from Hugging Face (
 
 The thresholds and pulse durations almost certainly need tuning on the bench — start with the wheels off the ground.
 
-## Object find (off-device)
+## Brain object find and seek (off-device)
 
-A second off-device service answers text-queried object lookups. It dials a WebSocket into the Pi and stays connected; the Pi exposes `/find?object=<text>` and proxies the request over that socket. The Mac is never directly addressable.
+A brain-owned off-device service answers text-queried object lookups. It dials a WebSocket into the Pi and stays connected; the Pi exposes `/find?object=<text>` and proxies the request over that socket. The Mac is never directly addressable.
 
 On the Mac:
 
@@ -230,7 +373,7 @@ curl "http://rpi.local:8080/find?object=toy"
 | `VALLE_MAX_RESULTS` | `5` |
 | `VALLE_FIND_TIMEOUT_SECONDS` | `10` (Pi-side; how long the Pi waits for a brain response) |
 
-`make find` runs independently of `make brain` (autopilot). You can run both, just one, or neither.
+`make find` runs the brain-owned object find service independently of `make brain` (autopilot). You can run both, just one, or neither.
 
 ### `/seek` — drive around until found
 

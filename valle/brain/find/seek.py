@@ -12,11 +12,11 @@ from typing import Any
 
 import requests
 
-from ..brain.client import PiClient, PiClientError, SessionRejectedError
-from ..brain.config import BrainConfig
-from ..brain.depth import DepthEstimator
-from ..brain.frames import FrameReader
-from ..brain.policy import (
+from ..client import PiClient, PiClientError, SessionRejectedError
+from ..config import BrainConfig
+from ..depth import DepthEstimator
+from ..frames import FrameReader
+from ..policy import (
     BACKWARD,
     FORWARD,
     LEFT,
@@ -29,7 +29,7 @@ from .config import FindConfig
 from .detector import Detector
 
 
-log = logging.getLogger("valle.find.seek")
+log = logging.getLogger("valle.brain.find.seek")
 
 
 class SeekLoop:

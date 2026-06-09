@@ -36,6 +36,18 @@ _Avoid_: Steering turn, arc turn.
 A bounded period during which Valle drives itself based on what its camera sees, without per-step user commands.
 _Avoid_: Autonomous mode, self-driving session, exploration mode.
 
+**Agent session**:
+A bounded period for a scheduled or user-requested inspection mission with an explicit goal, where an external agent may request short movement intents, but Valle's reflex gate and motor controller still authorize and execute the actual motor pulses.
+_Avoid_: Fully autonomous mode, direct agent motor control.
+
+**Movement intent**:
+A proposed short movement inside an **Agent session**. It is not a motor command until the reflex gate authorizes it.
+_Avoid_: Agent command, direct drive command.
+
+**Reflex gate**:
+The local safety check that authorizes or vetoes a **Movement intent** using the latest clearance reading before Valle moves.
+_Avoid_: Agent judgement, object detector, planner.
+
 **Reflex driving**:
 The behavior Valle exhibits inside an **Autopilot session**: drive whenever the forward path is clear, turn toward the clearer side when blocked, reverse when stuck. No memory of past frames, no map, no destination.
 _Avoid_: Path planning, navigation, exploration, wandering.
@@ -53,6 +65,9 @@ _Avoid_: Path planning, navigation, exploration, wandering.
 - During an **Autopilot session**, **Siri control request**s are rejected — Valle answers only to the session.
 - The behavior inside an **Autopilot session** is **Reflex driving**, not navigation toward a destination.
 - An **Autopilot session** ends on an explicit **Stop command**, on a hard time cap, or when no forward or backward motion has been commanded for a no-progress window.
+- An **Agent session** uses the same session locking and watchdog shape as an **Autopilot session**, but it starts with an explicit mission goal and its movement comes from externally proposed **Movement intent**s.
+- A **Movement intent** may be rejected by the **Reflex gate** before motors move.
+- An agent may plan inspection routes, request observations, and decide what evidence is sufficient, but it must not bypass the **Reflex gate** for movement.
 
 ## Example dialogue
 
@@ -83,6 +98,9 @@ _Avoid_: Path planning, navigation, exploration, wandering.
 > **Dev:** "Does an **Autopilot session** have a destination?"
 > **Domain expert:** "No - it has no goal beyond 'don't be stopped.' If you want destination-following, that's a different concept than **Reflex driving**."
 
+> **Dev:** "Can an agent drive Valle directly during a scheduled inspection?"
+> **Domain expert:** "No - the agent proposes a **Movement intent**, and the **Reflex gate** decides whether Valle may execute the short motor pulse."
+
 ## Flagged ambiguities
 
 - "Valle" could have meant a feature inside the HA Voice Assistant app - resolved: **Valle** is a standalone robotic car context.
@@ -90,3 +108,4 @@ _Avoid_: Path planning, navigation, exploration, wandering.
 - "turn" could have meant either steering through an arc or rotating in place - resolved: turn requests are **Pivot turn**s.
 - "auto-correct the drive" could have meant per-command steering correction during a **Movement command** - resolved: autocorrection lives only inside an **Autopilot session** as **Reflex driving**; a **Movement command** is never modified by perception.
 - "detect objects" could have meant per-class object recognition for reflex - resolved: **Reflex driving** uses class-agnostic free-space sensing; per-class object recognition is a future, separate concern from reflex.
+- "agent control" could have meant direct motor control - resolved: agents may propose **Movement intent**s inside an **Agent session**, but the **Reflex gate** and motor controller remain authoritative.

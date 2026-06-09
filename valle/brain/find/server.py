@@ -10,14 +10,14 @@ import cv2
 import numpy as np
 import websocket
 
-from ..brain.config import BrainConfig
-from ..brain.depth import DepthEstimator
+from ..config import BrainConfig
+from ..depth import DepthEstimator
 from .config import FindConfig
 from .detector import Detector
 from .seek import SeekLoop
 
 
-log = logging.getLogger("valle.find")
+log = logging.getLogger("valle.brain.find")
 
 
 class FindServer:
@@ -39,8 +39,11 @@ class FindServer:
     def request_stop(self) -> None:
         self._stop_requested = True
 
-    def run(self) -> None:
+    def load(self) -> None:
         self._detector.load()
+
+    def run(self) -> None:
+        self.load()
         while not self._stop_requested:
             try:
                 self._serve_one_connection()
@@ -114,6 +117,13 @@ class FindServer:
             "capture_seconds": capture_seconds,
         }
 
+    def handle_find_request(self, object_query: str) -> dict[str, Any]:
+        response = self._handle_find(
+            {"id": "brain-api", "type": "find", "object": object_query}
+        )
+        response.pop("id", None)
+        return response
+
     def _handle_seek(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = message.get("id")
         query = message.get("object")
@@ -138,6 +148,29 @@ class FindServer:
             return {"id": message_id, "error": f"seek failed: {exc}"}
 
         return {"id": message_id, "type": "seek_result", **result}
+
+    def handle_seek_request(
+        self,
+        object_query: str,
+        *,
+        max_seconds: float | None = None,
+        speed: float | None = None,
+    ) -> dict[str, Any]:
+        response = self._handle_seek(
+            {
+                "id": "brain-api",
+                "type": "seek",
+                "object": object_query,
+                "max_seconds": (
+                    max_seconds
+                    if max_seconds is not None
+                    else self._config.seek_default_max_seconds
+                ),
+                "speed": speed,
+            }
+        )
+        response.pop("id", None)
+        return response
 
     def _seek_loop(self) -> SeekLoop:
         if self._seek is None:

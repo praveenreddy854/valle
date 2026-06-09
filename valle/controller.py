@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .motors import MotorDriver
+from .reflex import ReflexGate
 
 
 COMMAND_ALIASES = {
@@ -42,6 +43,8 @@ AUTOPILOT_END_REASONS = {
     "blind": "autopilot_blind",
 }
 
+SESSION_KINDS = ("autopilot", "agent")
+
 
 @dataclass(frozen=True)
 class ActiveCommand:
@@ -54,10 +57,12 @@ class ActiveCommand:
 @dataclass(frozen=True)
 class AutopilotSession:
     session_id: str
+    kind: str
     started_at_epoch: float
     started_at_monotonic: float
     max_seconds: float
     idle_seconds: float
+    mission: dict[str, Any] | None = None
 
 
 class SessionAlreadyActiveError(RuntimeError):
@@ -83,6 +88,7 @@ class ValleController:
         default_turn_duration_seconds: float = 0.25,
         autopilot_max_seconds: float = 1800.0,
         autopilot_idle_seconds: float = 20.0,
+        reflex_gate: ReflexGate | None = None,
     ) -> None:
         self._driver = driver
         self._default_speed_percent = default_speed_percent
@@ -100,6 +106,7 @@ class ValleController:
         self._session_hard_cap_timer: threading.Timer | None = None
         self._session_idle_timer: threading.Timer | None = None
         self._session_last_progress_monotonic: float = 0.0
+        self._reflex_gate = reflex_gate or ReflexGate()
         self._driver.stop()
 
     @property
@@ -160,6 +167,38 @@ class ValleController:
         max_seconds: float | None = None,
         idle_seconds: float | None = None,
     ) -> dict[str, Any]:
+        return self._start_session(
+            kind="autopilot",
+            max_seconds=max_seconds,
+            idle_seconds=idle_seconds,
+        )
+
+    def start_agent_session(
+        self,
+        *,
+        mission: dict[str, Any],
+        max_seconds: float | None = None,
+        idle_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        return self._start_session(
+            kind="agent",
+            mission=normalize_agent_mission(mission),
+            max_seconds=max_seconds,
+            idle_seconds=idle_seconds,
+        )
+
+    def _start_session(
+        self,
+        *,
+        kind: str,
+        mission: dict[str, Any] | None = None,
+        max_seconds: float | None = None,
+        idle_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        if kind not in SESSION_KINDS:
+            raise ValueError(f"session kind must be one of {SESSION_KINDS}")
+        if kind == "agent" and mission is None:
+            raise ValueError("agent mission is required")
         with self._lock:
             if self._session is not None:
                 raise SessionAlreadyActiveError(self._session.session_id)
@@ -182,20 +221,26 @@ class ValleController:
             now_epoch = time.time()
             self._session = AutopilotSession(
                 session_id=session_id,
+                kind=kind,
                 started_at_epoch=now_epoch,
                 started_at_monotonic=now_mono,
                 max_seconds=max_s,
                 idle_seconds=idle_s,
+                mission=mission,
             )
             self._session_last_progress_monotonic = now_mono
             self._arm_hard_cap_locked(max_s)
             self._arm_idle_watchdog_locked(idle_s)
-            return {
+            result: dict[str, Any] = {
                 "session_id": session_id,
+                "kind": kind,
                 "max_seconds": max_s,
                 "idle_seconds": idle_s,
                 "started_at": now_epoch,
             }
+            if mission is not None:
+                result["mission"] = mission
+            return result
 
     def autopilot_drive(
         self,
@@ -212,8 +257,7 @@ class ValleController:
             )
 
         with self._lock:
-            if self._session is None or self._session.session_id != session_id:
-                raise SessionNotActiveError(session_id)
+            self._require_session_locked(session_id, kind="autopilot")
 
             speed = clamp(
                 speed_percent,
@@ -235,10 +279,103 @@ class ValleController:
 
             return self._autopilot_status_locked()
 
+    def agent_intent(
+        self,
+        session_id: str,
+        *,
+        direction: str,
+        duration_seconds: float | None = None,
+        speed_percent: float | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        normalized = normalize_command(direction)
+        if normalized not in AUTOPILOT_DIRECTIONS:
+            raise ValueError(f"agent direction must be one of {AUTOPILOT_DIRECTIONS}")
+
+        with self._lock:
+            self._require_session_locked(session_id, kind="agent")
+
+            decision = self._reflex_gate.decide(normalized)
+            if not decision.allowed:
+                return {
+                    "executed": False,
+                    "direction": normalized,
+                    "reason": reason,
+                    "reflex": decision.as_dict(),
+                    "agent": self._autopilot_status_locked(),
+                }
+
+            speed = clamp(
+                speed_percent,
+                default=self._default_speed_percent,
+                low=0.0,
+                high=100.0,
+            )
+            duration = clamp(
+                duration_seconds,
+                default=self._default_duration_seconds,
+                low=0.0,
+                high=self._max_duration_seconds,
+            )
+            self._pulse_locked(normalized, speed, duration)
+
+            if normalized in PROGRESS_DIRECTIONS:
+                self._session_last_progress_monotonic = time.monotonic()
+                self._arm_idle_watchdog_locked(self._session.idle_seconds)
+
+            return {
+                "executed": True,
+                "direction": normalized,
+                "duration": duration,
+                "speed": speed,
+                "reason": reason,
+                "reflex": decision.as_dict(),
+                "agent": self._autopilot_status_locked(),
+            }
+
+    def update_reflex(
+        self,
+        *,
+        left: float,
+        center: float,
+        right: float,
+        source: str = "unknown",
+    ) -> dict[str, Any]:
+        with self._lock:
+            reading = self._reflex_gate.update(
+                left=left,
+                center=center,
+                right=right,
+                source=source,
+            )
+            return {"ok": True, "clearance": reading.as_dict()}
+
+    def agent_observe(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._require_session_locked(session_id, kind="agent")
+            latest = self._reflex_gate.latest()
+            payload: dict[str, Any] = {
+                "agent": self._autopilot_status_locked(),
+                "status": self.status(),
+            }
+            if latest is not None:
+                payload["reflex"] = {"clearance": latest.as_dict()}
+            else:
+                payload["reflex"] = {"clearance": None}
+            return payload
+
     def stop_autopilot(self, session_id: str, *, reason: str = "manual") -> dict[str, Any]:
         with self._lock:
-            if self._session is None or self._session.session_id != session_id:
-                raise SessionNotActiveError(session_id)
+            self._require_session_locked(session_id, kind="autopilot")
+            mapped = reason if reason in AUTOPILOT_END_REASONS else "manual"
+            self._end_session_locked(reason=mapped)
+            return self.status()
+
+    def stop_agent_session(
+        self, session_id: str, *, reason: str = "manual"
+    ) -> dict[str, Any]:
+        with self._lock:
+            self._require_session_locked(session_id, kind="agent")
             mapped = reason if reason in AUTOPILOT_END_REASONS else "manual"
             self._end_session_locked(reason=mapped)
             return self.status()
@@ -264,7 +401,7 @@ class ValleController:
                 }
 
             if self._session is not None:
-                base["autopilot"] = self._autopilot_status_locked()
+                base[self._session.kind] = self._autopilot_status_locked()
             return base
 
     def close(self) -> None:
@@ -377,6 +514,8 @@ class ValleController:
 
     def _end_session_locked(self, *, reason: str) -> None:
         mapped = AUTOPILOT_END_REASONS.get(reason, AUTOPILOT_END_REASONS["manual"])
+        if self._session is not None and self._session.kind == "agent":
+            mapped = mapped.replace("autopilot_", "agent_", 1)
         self._cancel_hard_cap_locked()
         self._cancel_idle_watchdog_locked()
         self._sequence += 1
@@ -396,14 +535,26 @@ class ValleController:
             0.0,
             self._session_last_progress_monotonic + self._session.idle_seconds - now,
         )
-        return {
+        status: dict[str, Any] = {
             "session_id": self._session.session_id,
+            "kind": self._session.kind,
             "started_at": self._session.started_at_epoch,
             "max_seconds": self._session.max_seconds,
             "idle_seconds": self._session.idle_seconds,
             "session_remaining_seconds": round(session_remaining, 3),
             "idle_remaining_seconds": round(idle_remaining, 3),
         }
+        if self._session.mission is not None:
+            status["mission"] = self._session.mission
+        return status
+
+    def _require_session_locked(self, session_id: str, *, kind: str) -> None:
+        if (
+            self._session is None
+            or self._session.session_id != session_id
+            or self._session.kind != kind
+        ):
+            raise SessionNotActiveError(session_id)
 
 
 def normalize_command(command: str) -> str:
@@ -413,6 +564,39 @@ def normalize_command(command: str) -> str:
     except KeyError as exc:
         allowed = ", ".join(sorted(COMMAND_ALIASES))
         raise ValueError(f"Unknown command '{command}'. Allowed commands: {allowed}") from exc
+
+
+def normalize_agent_mission(mission: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(mission, dict):
+        raise ValueError("agent mission must be an object")
+
+    goal = mission.get("goal")
+    if not isinstance(goal, str) or not goal.strip():
+        raise ValueError("agent mission goal is required")
+
+    normalized = dict(mission)
+    normalized["goal"] = goal.strip()
+
+    for key in ("task", "skill", "schedule", "report_to"):
+        value = normalized.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"agent mission {key} must be a non-empty string")
+        normalized[key] = value.strip()
+
+    targets = normalized.get("targets")
+    if targets is not None:
+        if not isinstance(targets, list):
+            raise ValueError("agent mission targets must be a list")
+        cleaned_targets = []
+        for target in targets:
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError("agent mission targets must be non-empty strings")
+            cleaned_targets.append(target.strip())
+        normalized["targets"] = cleaned_targets
+
+    return normalized
 
 
 def clamp(

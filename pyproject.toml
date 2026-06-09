@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "valle"
 version = "0.1.0"
 description = "Raspberry Pi robotic car webhook service plus off-device autopilot brain."
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
   "Flask>=3.0,<4",
   "flask-sock>=0.7,<1",
@@ -25,6 +25,11 @@ brain = [
   "scipy>=1.11",
   "torch>=2.2",
   "transformers>=4.40",
+]
+# Mac-side scheduled inspection agent dependencies.
+agent = [
+  "crewai[azure-ai-inference]>=1.0,<2",
+  "requests>=2.31",
 ]
 
 [tool.setuptools.packages.find]

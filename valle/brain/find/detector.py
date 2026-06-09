@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 
-log = logging.getLogger("valle.find.detector")
+log = logging.getLogger("valle.brain.find.detector")
 
 
 class Detector:

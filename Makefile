@@ -1,7 +1,8 @@
 PY ?= .venv/bin/python
+VENV_PY ?= python3.12
 PI ?= http://rpi.local:8080
 
-.PHONY: help app camera brain test health stop install-pi install-brain
+.PHONY: help app camera brain brain-api find agent test health stop install-pi install-brain install-agent install-brain-api
 
 help:
 	@echo "Pi:"
@@ -11,8 +12,12 @@ help:
 	@echo ""
 	@echo "Mac:"
 	@echo "  make brain        Run autopilot brain"
-	@echo "  make find         Run object-find server"
+	@echo "  make brain-api    Run brain HTTP API (port 8090)"
+	@echo "  make find         Run brain object-find/seek server"
+	@echo "  make agent        Run brain CrewAI inspection agent"
 	@echo "  make install-brain  Create .venv and install brain extras"
+	@echo "  make install-agent  Create Python 3.12 .venv and install CrewAI agent extras"
+	@echo "  make install-brain-api  Create .venv and install brain API extras"
 	@echo ""
 	@echo "Either:"
 	@echo "  make test         Run unit tests"
@@ -28,8 +33,14 @@ camera:
 brain:
 	$(PY) -m valle.brain
 
+brain-api:
+	$(PY) -m valle.brain.api
+
 find:
-	$(PY) -m valle.find
+	$(PY) -m valle.brain.find
+
+agent:
+	$(PY) -m valle.brain.agent
 
 test:
 	$(PY) -m unittest discover tests -v
@@ -41,11 +52,25 @@ stop:
 	curl -s -X POST $(PI)/stop
 
 install-pi:
-	python3 -m venv --system-site-packages .venv
+	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-pi")'
+	$(VENV_PY) -m venv --system-site-packages .venv
 	.venv/bin/pip install --upgrade pip
 	.venv/bin/pip install -r requirements.txt
 
 install-brain:
-	python3 -m venv .venv
+	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-brain")'
+	$(VENV_PY) -m venv .venv
 	.venv/bin/pip install --upgrade pip
 	.venv/bin/pip install -e '.[brain]'
+
+install-agent:
+	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-agent")'
+	$(VENV_PY) -m venv .venv
+	.venv/bin/pip install --upgrade pip
+	.venv/bin/pip install -e '.[agent]'
+
+install-brain-api:
+	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-brain-api")'
+	$(VENV_PY) -m venv .venv
+	.venv/bin/pip install --upgrade pip
+	.venv/bin/pip install -e '.[brain,agent]'
