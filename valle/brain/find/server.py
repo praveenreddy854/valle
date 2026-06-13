@@ -15,6 +15,7 @@ from ..depth import DepthEstimator
 from .config import FindConfig
 from .detector import Detector
 from .seek import SeekLoop
+from ...observability import setup_observability
 
 
 log = logging.getLogger("valle.brain.find")
@@ -213,10 +214,7 @@ def build_server(config: FindConfig | None = None) -> FindServer:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_observability("valle-brain-find")
     server = build_server()
 
     def _handle_signal(signum: int, frame: object) -> None:

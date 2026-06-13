@@ -96,6 +96,61 @@ You can force mock mode with:
 VALLE_DRIVER=mock python -m valle.app
 ```
 
+## Digital twin (simulator)
+
+The digital twin runs the **real** Pi control server against a simulated
+robot in a simulated room, so the whole stack can be verified after every
+change without hardware. One process replaces both the Pi and its camera:
+
+```bash
+make sim
+```
+
+- Pi control API on `http://127.0.0.1:8080` (`driver: sim`) — the production
+  `valle.app` code: sessions, reflex gate, watchdogs, every endpoint.
+- Simulated camera on `http://127.0.0.1:8081/stream.mjpg` — a first-person
+  MJPEG render of the room from the robot's pose.
+- Visual test UI at `http://127.0.0.1:8080/sim/ui` — the robot camera next to
+  a live top-down room map (walls, door lock state, objects, robot heading and
+  travel trail), with drive buttons, keyboard control (WASD/arrows, space to
+  stop), a door-lock toggle, and world reset.
+
+The default world is a 6 m x 5 m room containing a brown **door with a
+deadbolt lock** on the north wall (horizontal gold bar = locked, vertical =
+unlocked), a yellow **lemon** on the floor to seek, and a box obstacle.
+Driving any endpoint (`/forward`, autopilot, agent intents) moves the
+simulated robot; walls block it; the camera view updates live.
+
+Point the Mac-side brain services at the twin and everything runs unchanged:
+
+```bash
+VALLE_PI_BASE_URL=http://127.0.0.1:8080 \
+VALLE_CAMERA_URL=http://127.0.0.1:8081/stream.mjpg \
+make find
+curl "http://127.0.0.1:8080/seek?object=lemon"
+```
+
+Ground-truth endpoints for verification scripts (served by the sim API):
+
+```text
+GET  /sim/state           robot pose, driver action, door lock, object
+                          distances and bearings
+POST /sim/door            {"locked": true|false}
+POST /sim/reset           restore the start pose and door state
+```
+
+`tests/test_sim.py` runs the end-to-end verification on every `make test`:
+momentary commands move the simulated robot, agent intents are vetoed without
+fresh reflex readings, executed with them, and blocked in front of walls, and
+the renderer shows the lemon and the lock state.
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_PORT` | `8080` (sim Pi API) |
+| `VALLE_CAMERA_PORT` | `8081` (sim camera) |
+| `VALLE_CAMERA_WIDTH` / `VALLE_CAMERA_HEIGHT` | `640` / `480` |
+| `VALLE_SIM_FPS` | `10` |
+
 ## Configuration
 
 | Environment variable | Default |
@@ -117,6 +172,78 @@ VALLE_DRIVER=mock python -m valle.app
 | `VALLE_RIGHT_ENABLE_PIN` | `13` |
 
 Before testing on the floor, lift the car so the wheels can spin freely and verify `/stop` works.
+
+## Logs and telemetry
+
+Every runnable Valle service configures file logging and OpenTelemetry tracing.
+By default:
+
+```text
+logs/<service>.log
+logs/<service>.traces.jsonl
+```
+
+Useful settings:
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_LOG_DIR` | `logs` |
+| `VALLE_LOG_LEVEL` | `INFO` |
+| `VALLE_LOG_CONSOLE` | `true` |
+| `VALLE_LOG_MAX_BYTES` | `10000000` |
+| `VALLE_LOG_BACKUP_COUNT` | `5` |
+| `VALLE_LOG_SUPPRESS_PORTAL_POLLING` | `true` |
+| `VALLE_VERBOSE_SDK_LOGS` | `false` |
+| `VALLE_OTEL_ENABLED` | `true` |
+| `VALLE_OTEL_TRACES_FILE` | `logs/<service>.traces.jsonl` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset; when set, traces are also exported over OTLP/HTTP |
+
+OpenTelemetry instruments Flask routes and outbound `requests` calls when the
+instrumentation packages are installed. Local trace files are JSONL so they can
+be inspected without running a collector.
+
+Successful portal polling requests are suppressed from the log by default so
+the portal does not flood the request log it is displaying. Set
+`VALLE_LOG_SUPPRESS_PORTAL_POLLING=false` to include those requests. Azure,
+CrewAI, and `httpx` internals log warnings and errors by default; set
+`VALLE_VERBOSE_SDK_LOGS=true` when debugging SDK transport details.
+
+## Brain web portal
+
+Run the brain API and open the portal:
+
+```bash
+make brain-api
+open http://127.0.0.1:8090/portal
+```
+
+The portal shows:
+
+- The Pi camera feed through the brain API at `/portal/camera.mjpg`.
+- Available local log and trace files from `VALLE_LOG_DIR`.
+- Recent JSON log lines and OpenTelemetry span records.
+- The configured `OTEL_EXPORTER_OTLP_ENDPOINT`, with URL credentials masked.
+
+Portal settings:
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_PORTAL_CAMERA_URL` | `VALLE_CAMERA_URL` if set, otherwise `http://rpi.local:8081/stream.mjpg` |
+| `VALLE_LOG_DIR` | `logs` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset |
+
+Example `.env` values:
+
+```text
+VALLE_PORTAL_CAMERA_URL=http://rpi.local:8081/stream.mjpg
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+```
+
+If your collector expects the base OTLP endpoint instead, use:
+
+```text
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+```
 
 ## Autopilot (off-device brain)
 
@@ -260,8 +387,17 @@ make agent
 ```
 
 The runner exposes CrewAI tools for starting a session, observing the Pi status,
-requesting reflex-gated drive pulses, stopping the session, and recording the
+requesting reflex-gated drive pulses, checking whether an object is visible in
+the camera (`find_object`, with a left/center/right position hint), saving
+evidence frames (`capture_evidence`), stopping the session, and recording the
 inspection result. It does not call motor endpoints directly.
+
+While a mission runs, the runner also feeds the Pi's reflex gate: a background
+perception loop pulls camera frames from `VALLE_CAMERA_URL`, runs monocular
+depth, and posts clearance readings to `POST /agent/reflex` at
+`VALLE_BRAIN_TICK_HZ`. Without those readings every movement intent would be
+vetoed with `no_reflex_reading`. This is why `make install-agent` installs the
+brain extras alongside CrewAI.
 
 ### Mac side: brain API
 
@@ -305,6 +441,40 @@ curl -X POST "http://127.0.0.1:8090/seek" \
   -H "content-type: application/json" \
   -d '{"object": "toy", "max_seconds": 30}'
 ```
+
+Schedule a recurring mission (daily, 24-hour `HH:MM`):
+
+```bash
+curl -X POST "http://127.0.0.1:8090/missions" \
+  -H "content-type: application/json" \
+  -d '{"schedule": "22:00", "goal": "check the back door lock", "targets": ["back_door"]}'
+
+curl "http://127.0.0.1:8090/missions"
+curl -X DELETE "http://127.0.0.1:8090/missions/<mission_id>"
+```
+
+Inspect mission history and evidence images:
+
+```bash
+curl "http://127.0.0.1:8090/runs"
+curl "http://127.0.0.1:8090/runs/<run_id>"
+open "http://127.0.0.1:8090/evidence/<run_id>/01-back_door_wide.jpg"
+```
+
+Every agent run — CLI, `/agent/run`, or scheduled — appends a record to
+`VALLE_RUNS_FILE` with the mission, status, the recorded inspection result, and
+the evidence frames the agent saved with its `capture_evidence` tool. When
+`VALLE_NOTIFY_URL` is set, each finished mission posts a plain-text summary with
+a `Title` header; point it at an ntfy topic (for example
+`https://ntfy.sh/valle-home`) to get phone pushes.
+
+| Environment variable | Default |
+| --- | --- |
+| `VALLE_RUNS_FILE` | `logs/agent-runs.jsonl` |
+| `VALLE_EVIDENCE_DIR` | `evidence` |
+| `VALLE_MISSIONS_FILE` | `missions.json` |
+| `VALLE_SCHEDULER_POLL_SECONDS` | `20` |
+| `VALLE_NOTIFY_URL` | unset |
 
 The brain API is separate from the Pi motor API. Movement still goes through the
 Pi's session and reflex gates.

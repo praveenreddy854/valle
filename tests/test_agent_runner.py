@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 import unittest
 from typing import Any
 from unittest.mock import Mock, patch
 
 from valle.brain.agent.client import AgentPiClient, AgentPiClientError
 from valle.brain.agent.config import AgentConfig
-from valle.brain.agent.runner import _build_llm
+from valle.brain.agent.runner import _build_llm, _prepare_crewai_runtime
 
 
 class FakeLLM:
@@ -62,6 +63,29 @@ class AgentRunnerTest(unittest.TestCase):
                 AgentPiClient("http://127.0.0.1:8090").validate_agent_api()
 
         self.assertIn("VALLE_PI_BASE_URL", str(raised.exception))
+
+    def test_prepare_crewai_runtime_disables_crewai_external_tracing_by_default(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "CREWAI_TRACING_ENABLED": "",
+                "CREWAI_DISABLE_TELEMETRY": "",
+                "CREWAI_DISABLE_TRACKING": "",
+            },
+            clear=True,
+        ):
+            _prepare_crewai_runtime()
+
+            self.assertEqual(os.environ["CREWAI_TRACING_ENABLED"], "false")
+            self.assertEqual(os.environ["CREWAI_DISABLE_TELEMETRY"], "true")
+            self.assertEqual(os.environ["CREWAI_DISABLE_TRACKING"], "true")
+
+        with patch.dict("os.environ", {}, clear=True):
+            _prepare_crewai_runtime()
+
+            self.assertEqual(os.environ["CREWAI_TRACING_ENABLED"], "false")
+            self.assertEqual(os.environ["CREWAI_DISABLE_TELEMETRY"], "true")
+            self.assertEqual(os.environ["CREWAI_DISABLE_TRACKING"], "true")
 
 
 if __name__ == "__main__":

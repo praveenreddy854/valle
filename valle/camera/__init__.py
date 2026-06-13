@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Condition
 
+from ..observability import setup_observability
+
 
 @dataclass(frozen=True)
 class CameraConfig:
@@ -96,7 +98,7 @@ class _ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 def serve(config: CameraConfig | None = None) -> None:
     config = config or CameraConfig.from_env()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_observability("valle-camera")
     log = logging.getLogger("valle.camera")
 
     try:

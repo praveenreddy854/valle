@@ -2,7 +2,7 @@ PY ?= .venv/bin/python
 VENV_PY ?= python3.12
 PI ?= http://rpi.local:8080
 
-.PHONY: help app camera brain brain-api find agent test health stop install-pi install-brain install-agent install-brain-api
+.PHONY: help app camera brain brain-api find agent sim test health stop install-pi install-brain install-agent install-brain-api
 
 help:
 	@echo "Pi:"
@@ -20,6 +20,7 @@ help:
 	@echo "  make install-brain-api  Create .venv and install brain API extras"
 	@echo ""
 	@echo "Either:"
+	@echo "  make sim          Run the digital twin (Pi API 8080 + sim camera 8081)"
 	@echo "  make test         Run unit tests"
 	@echo "  make health       curl PI /health"
 	@echo "  make stop         curl PI /stop  (emergency)"
@@ -41,6 +42,9 @@ find:
 
 agent:
 	$(PY) -m valle.brain.agent
+
+sim:
+	$(PY) -m valle.sim
 
 test:
 	$(PY) -m unittest discover tests -v
@@ -67,7 +71,7 @@ install-agent:
 	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-agent")'
 	$(VENV_PY) -m venv .venv
 	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -e '.[agent]'
+	.venv/bin/pip install -e '.[brain,agent]'
 
 install-brain-api:
 	$(VENV_PY) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Valle requires Python 3.12. Run: VENV_PY=python3.12 make install-brain-api")'

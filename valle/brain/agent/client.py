@@ -39,6 +39,14 @@ class AgentPiClient:
     def observe(self, session_id: str) -> dict[str, Any]:
         return self._post(f"/agent/{session_id}/observe", {})
 
+    def post_reflex(
+        self, *, left: float, center: float, right: float, source: str
+    ) -> dict[str, Any]:
+        return self._post(
+            "/agent/reflex",
+            {"left": left, "center": center, "right": right, "source": source},
+        )
+
     def drive_pulse(
         self,
         session_id: str,

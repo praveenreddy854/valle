@@ -28,6 +28,26 @@ The Pi is authoritative for motor safety. Off-device services can request work,
 send perception readings, or ask for bounded movement, but they do not directly
 drive GPIO pins.
 
+## Observability
+
+Each service writes structured JSON logs and OpenTelemetry spans to local files
+under `logs/` by default. This includes the Pi control server, camera streamer,
+autopilot brain, brain API, brain find/seek service, and CrewAI agent runner.
+
+OpenTelemetry Flask and `requests` instrumentation captures inbound API calls
+and outbound Pi/brain HTTP calls. When `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
+spans are also sent to an OTLP/HTTP collector.
+
+The brain API also exposes a read-only web portal at `/portal`. It tails local
+JSON log and trace files from `VALLE_LOG_DIR`, shows the configured OTLP export
+target with credentials masked, and proxies the Pi MJPEG stream from
+`VALLE_PORTAL_CAMERA_URL` or `VALLE_CAMERA_URL`.
+
+Successful portal polling requests are filtered from the service log by
+default. CrewAI's separate cloud tracing and anonymous telemetry are disabled by
+default in the Valle agent runner; Valle's own OpenTelemetry spans remain active
+and continue to export to local JSONL and `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
 ## Brain API
 
 The Mac-side brain API runs with `python -m valle.brain.api` or `make brain-api`
@@ -39,6 +59,11 @@ It exposes:
 - `POST /agent/run`
 - `POST /find`
 - `POST /seek`
+- `GET /runs` and `GET /runs/<run_id>`: agent mission run history.
+- `GET /evidence/<run_id>/<file>`: evidence images saved during a run.
+- `GET/POST /missions` and `DELETE /missions/<id>`: recurring scheduled
+  missions (daily `HH:MM`); a background scheduler loop launches due missions
+  through the same agent path as `POST /agent/run`.
 
 These endpoints are brain-facing entry points for schedulers or other local
 clients. They do not bypass the Pi control server; movement still goes through
@@ -92,6 +117,30 @@ The agent loop itself lives in `valle.brain.agent` and uses CrewAI with Azure
 OpenAI. Object find and seek live in `valle.brain.find`. CrewAI owns the
 agent/task orchestration. Valle owns the tools that touch the robot.
 
+## Digital Twin
+
+`valle/sim` is a simulated stand-in for the physical robot used to verify
+changes without hardware. It keeps the production seams honest: the real
+`valle.app` Flask server runs with a `SimMotorDriver` (the same `MotorDriver`
+protocol as GPIO), and the camera URL serves an MJPEG render of a simulated
+room instead of the Pi camera. Everything above those two seams — controller,
+sessions, reflex gate, brain services, agent tools — runs unmodified.
+
+The world is a 2D room in meters: wall segments (including a door whose
+deadbolt is rendered horizontal when locked, vertical when unlocked), billboard
+objects such as a lemon to seek, and the robot pose integrated from the live
+motor state with wall collision. A raycast renderer produces the first-person
+view and a per-column depth buffer; `clearance_strips()` exposes ground-truth
+reflex readings so tests can exercise the agent gate deterministically without
+neural depth.
+
+`GET /sim/state`, `POST /sim/door`, and `POST /sim/reset` expose and mutate
+ground truth for verification scripts; `GET /sim/world` returns the static
+geometry. `GET /sim/ui` serves a browser page for visual testing: the camera
+stream beside a live top-down map (robot pose, heading, travel trail, door
+lock state) with manual drive controls. `tests/test_sim.py` drives the full Pi
+API against the twin in-process on every test run.
+
 ## Reflex Gate
 
 `valle/reflex.py` contains `ReflexGate`, which stores the latest normalized
@@ -128,7 +177,8 @@ Scheduled task example: check the back door lock at 10 PM.
 ```text
 1. Scheduler starts an agent session.
 2. Agent loads the task plan and known inspection spot.
-3. Perception service posts fresh clearance to /agent/reflex.
+3. The agent runner's perception loop posts fresh depth clearance to
+   /agent/reflex.
 4. Agent proposes a short drive_pulse intent.
 5. ReflexGate authorizes or vetoes the intent.
 6. ValleController executes only authorized bounded motor pulses.
@@ -154,6 +204,10 @@ CrewAI tools exposed by the agent runner:
 - `observe`: calls `POST /agent/<session_id>/observe`.
 - `drive_pulse`: calls `POST /agent/<session_id>/intent` with `type:
   drive_pulse`.
+- `find_object`: runs the OWLv2 detector on the latest camera frame and reports
+  detections with a left/center/right position hint.
+- `capture_evidence`: saves the latest camera frame as a JPEG under
+  `evidence/<run_id>/` for the mission report.
 - `stop_agent_session`: calls `POST /agent/<session_id>/intent` with `type:
   stop`.
 - `record_inspection_result`: records the mission result for scheduler/log output.
@@ -255,6 +309,12 @@ Back door lock is uncertain. I reached the inspection spot, but the image is too
 dark to confirm the deadbolt state.
 ```
 
+Every agent run appends a record to `VALLE_RUNS_FILE` (default
+`logs/agent-runs.jsonl`) containing the mission, status, recorded result, and
+the evidence images captured during the run. When `VALLE_NOTIFY_URL` is set,
+finished missions post an ntfy-compatible plain-text summary so all-clear,
+failed, and needs-follow-up outcomes reach the user.
+
 ## Safety Invariants
 
 - Agents never call motor driver methods.
@@ -269,8 +329,7 @@ dark to confirm the deadbolt state.
 
 - Teach mode for recording routes and inspection spots.
 - Persistent house map of rooms, landmarks, and target viewpoints.
-- Evidence image storage with task run IDs.
-- Mission scheduler service for recurring jobs.
 - Dedicated vision inspector for lock state, stove knobs, floor blockers, and
   pet bowl status.
-- Notification policy for all-clear, uncertain, and urgent findings.
+- Per-finding notification policy (current notifications fire on every
+  finished mission).

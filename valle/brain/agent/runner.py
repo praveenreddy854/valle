@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
+from datetime import datetime
 from typing import Any
 
 from .config import AgentConfig, load_mission
+from ..evidence import EvidenceStore
+from ..notify import notify_mission_result
+from ..runs import RunStore, new_run_id
+from ...observability import get_tracer, setup_observability
 
 log = logging.getLogger("valle.brain.agent")
 
 
 def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
+    _prepare_crewai_runtime()
     try:
         from crewai import Agent, Crew, LLM, Process, Task
     except ImportError as exc:
@@ -22,7 +29,9 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
     from .client import AgentPiClient
     from .tools import (
         AgentSessionState,
+        CaptureEvidenceTool,
         DrivePulseTool,
+        FindObjectTool,
         ObserveTool,
         RecordInspectionResultTool,
         StartAgentSessionTool,
@@ -31,11 +40,17 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
 
     client = AgentPiClient(config.pi_base_url)
     client.validate_agent_api()
+    perception = _build_perception(client)
+    run_id = new_run_id()
+    runs = RunStore.from_env()
+    evidence = EvidenceStore.from_env(run_id)
     state = AgentSessionState()
     tools = [
         StartAgentSessionTool(client=client, mission=mission, state=state),
         ObserveTool(client=client, state=state),
         DrivePulseTool(client=client, state=state),
+        FindObjectTool(perception=perception),
+        CaptureEvidenceTool(perception=perception, evidence=evidence),
         StopAgentSessionTool(client=client, state=state),
         RecordInspectionResultTool(mission=mission, state=state),
     ]
@@ -47,8 +62,12 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         backstory=(
             "You operate a small Raspberry Pi robot car. You can plan inspection "
             "missions, but you cannot drive motors directly. All movement must "
-            "go through the reflex-gated drive_pulse tool. If movement is vetoed, "
-            "observe and choose a safer step or report uncertainty."
+            "go through the reflex-gated drive_pulse tool. A perception loop "
+            "keeps the robot's reflex gate updated while you work; if movement "
+            "is vetoed, observe and choose a safer step or report uncertainty. "
+            "Use find_object to check whether a target is visible and whether "
+            "it sits left, center, or right in the camera view, then pivot "
+            "toward it before driving."
         ),
         tools=tools,
         llm=llm,
@@ -63,11 +82,14 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
             "Task: {task}\n"
             "Skill: {skill}\n"
             "Targets: {targets}\n\n"
-            "Start an agent session, observe the robot status, request only "
-            "short reflex-gated drive pulses when movement is needed, record "
-            "the inspection result, stop the session, and then provide a concise "
-            "final summary. If evidence is insufficient, record an uncertain "
-            "result instead of guessing."
+            "Start an agent session, observe the robot status, use find_object "
+            "to look for mission targets, and request only short reflex-gated "
+            "drive pulses when movement is needed (pivot toward the target's "
+            "reported position, then approach). Save camera frames with "
+            "capture_evidence at inspection viewpoints and reference the saved "
+            "files in the result. Record the inspection result, stop the "
+            "session, and then provide a concise final summary. If evidence is "
+            "insufficient, record an uncertain result instead of guessing."
         ),
         expected_output=(
             "A concise mission summary that includes the final state, confidence, "
@@ -81,23 +103,47 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         tasks=[task],
         process=Process.sequential,
         verbose=True,
+        tracing=False,
     )
 
-    try:
-        return crew.kickoff(inputs=_crew_inputs(mission))
-    finally:
-        if state.session_id is not None:
+    with get_tracer(__name__).start_as_current_span("crew.agent_mission") as span:
+        span.set_attribute("mission.goal", mission["goal"])
+        span.set_attribute("mission.skill", str(mission.get("skill", "")))
+        span.set_attribute("run.id", run_id)
+        started_at = datetime.now().isoformat(timespec="seconds")
+        error: str | None = None
+        perception.start()
+        try:
+            return crew.kickoff(inputs=_crew_inputs(mission))
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            if state.session_id is not None:
+                try:
+                    client.stop(state.session_id, reason="agent_runner_exit")
+                except Exception:
+                    log.exception("failed to stop active agent session")
+            perception.stop()
+            record = {
+                "run_id": run_id,
+                "mission": mission,
+                "started_at": started_at,
+                "ended_at": datetime.now().isoformat(timespec="seconds"),
+                "status": "failed" if error else "completed",
+                "error": error,
+                "result": state.result,
+                "evidence": evidence.items(),
+            }
             try:
-                client.stop(state.session_id, reason="agent_runner_exit")
+                runs.record(record)
+                notify_mission_result(record)
             except Exception:
-                log.exception("failed to stop active agent session")
+                log.exception("failed to record mission run %s", run_id)
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_observability("valle-brain-agent")
     config = AgentConfig.from_env()
     mission = load_mission()
 
@@ -109,6 +155,18 @@ def main() -> None:
 
     result = run_agent(config, mission)
     print(json.dumps(_result_to_jsonable(result), indent=2, sort_keys=True))
+
+
+def _build_perception(client: Any) -> Any:
+    try:
+        from .perception import build_agent_perception
+    except ImportError as exc:
+        raise RuntimeError(
+            "agent perception requires the brain extras (depth + detector). "
+            "Run `make install-brain-api` or "
+            "`.venv/bin/pip install -e '.[brain,agent]'`."
+        ) from exc
+    return build_agent_perception(client)
 
 
 def _crew_inputs(mission: dict[str, Any]) -> dict[str, str]:
@@ -144,6 +202,17 @@ def _build_llm(llm_class: Any, config: AgentConfig) -> Any:
             "`make install-agent` or "
             "`.venv/bin/pip install -e '.[agent]'`."
         ) from exc
+
+
+def _prepare_crewai_runtime() -> None:
+    _set_env_default("CREWAI_TRACING_ENABLED", "false")
+    _set_env_default("CREWAI_DISABLE_TELEMETRY", "true")
+    _set_env_default("CREWAI_DISABLE_TRACKING", "true")
+
+
+def _set_env_default(name: str, value: str) -> None:
+    if not os.getenv(name):
+        os.environ[name] = value
 
 
 def _uses_openai_v1_endpoint(endpoint: str) -> bool:
