@@ -20,6 +20,7 @@ from .controller import (
     ValleController,
 )
 from .motors import MotorDriver, create_motor_driver
+from .observability import configure_logging, configure_tracing
 
 
 SIMPLE_ROUTES = {
@@ -292,7 +293,9 @@ def _register_brain_bridge(app: Flask, bridge: BrainBridge, config: ValleConfig)
 
 def main() -> None:
     config = ValleConfig.from_env()
+    configure_logging("valle-pi")
     app = create_app(config)
+    configure_tracing("valle-pi", flask_app=app)
     controller = app.config["VALLE_CONTROLLER"]
     _register_shutdown(controller)
     app.run(host=config.host, port=config.port)

@@ -106,6 +106,58 @@ class DrivePulseTool(BaseTool):
         )
 
 
+class FindObjectInput(BaseModel):
+    object: str = Field(description="Plain-text object to look for, e.g. 'toy'.")
+
+
+class FindObjectTool(BaseTool):
+    name: str = "find_object"
+    description: str = (
+        "Check whether an object is visible in the current camera frame. "
+        "Returns detections with score, box, and horizontal position "
+        "(left, center, or right) so you can decide which way to move."
+    )
+    args_schema: Type[BaseModel] = FindObjectInput
+    perception: Any
+
+    def _run(self, object: str) -> str:
+        query = object.strip()
+        if not query:
+            return _json({"ok": False, "error": "object is required"})
+        try:
+            return _json(self.perception.find(query))
+        except Exception as exc:
+            return _json({"ok": False, "object": query, "error": str(exc)})
+
+
+class CaptureEvidenceInput(BaseModel):
+    label: str = Field(
+        description="Short label for the image, e.g. 'back_door_wide'."
+    )
+
+
+class CaptureEvidenceTool(BaseTool):
+    name: str = "capture_evidence"
+    description: str = (
+        "Save the current camera frame as an evidence image for the mission "
+        "report. Use it when you reach an inspection viewpoint or spot a "
+        "target, then reference the returned file in the recorded result."
+    )
+    args_schema: Type[BaseModel] = CaptureEvidenceInput
+    perception: Any
+    evidence: Any
+
+    def _run(self, label: str) -> str:
+        image = self.perception.latest_image()
+        if image is None:
+            return _json({"ok": False, "error": "no camera frame available"})
+        try:
+            item = self.evidence.save(image, label)
+        except Exception as exc:
+            return _json({"ok": False, "error": str(exc)})
+        return _json({"ok": True, **item})
+
+
 class StopAgentSessionInput(BaseModel):
     reason: str = Field(default="manual")
 

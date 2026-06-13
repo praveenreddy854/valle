@@ -1,5 +1,8 @@
 .venv/
 .env
+logs/
+evidence/
+missions.json
 __pycache__/
 *.pyc
 *.egg-info/

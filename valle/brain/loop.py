@@ -11,6 +11,7 @@ from .config import BrainConfig
 from .depth import DepthEstimator
 from .frames import Frame, FrameReader
 from .policy import BACKWARD, FORWARD, LEFT, RIGHT, ReflexPolicy, StripLayout, reduce_to_strips
+from ..observability import setup_observability
 
 
 log = logging.getLogger("valle.brain")
@@ -187,10 +188,7 @@ def build_brain(config: BrainConfig | None = None) -> Brain:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_observability("valle-brain")
     brain = build_brain()
 
     def _handle_signal(signum: int, frame: object) -> None:
