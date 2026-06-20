@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
 
 import requests
 
@@ -44,6 +48,7 @@ class Brain:
         self._stop_requested = True
 
     def run(self) -> None:
+        self._stop_requested = False
         self._depth.load()
         self._frames.start()
 
@@ -185,6 +190,69 @@ def build_brain(config: BrainConfig | None = None) -> Brain:
         hysteresis_margin=config.hysteresis_margin,
     )
     return Brain(config, client=client, frames=frames, depth=depth, policy=policy)
+
+
+class AutopilotController:
+    """Runs the autopilot :class:`Brain` loop in a background thread.
+
+    ``start``/``stop``/``status`` are idempotent and safe to call from request
+    handlers. One ``Brain`` is built lazily and reused across cycles so the
+    depth model stays loaded and resume is fast. ``paused()`` lets a foreground
+    task (seek, agent mission) borrow the Pi's single motor session: autopilot
+    stops, the task runs, then autopilot resumes only if it had been running.
+    """
+
+    def __init__(self, build: Callable[[], Brain] = build_brain) -> None:
+        self._build = build
+        self._brain: Brain | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> dict[str, Any]:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return {"running": True, "changed": False}
+            if self._brain is None:
+                self._brain = self._build()
+            thread = threading.Thread(
+                target=self._brain.run, name="valle-autopilot", daemon=True
+            )
+            self._thread = thread
+            thread.start()
+            return {"running": True, "changed": True}
+
+    def stop(self) -> dict[str, Any]:
+        with self._lock:
+            thread = self._thread
+            if thread is None or not thread.is_alive():
+                self._thread = None
+                return {"running": False, "changed": False}
+            assert self._brain is not None
+            self._brain.request_stop()
+        thread.join(timeout=10.0)
+        with self._lock:
+            self._thread = None
+        return {"running": False, "changed": True}
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def status(self) -> dict[str, Any]:
+        return {"running": self.is_running}
+
+    @contextmanager
+    def paused(self) -> Iterator[None]:
+        was_running = self.is_running
+        if was_running:
+            log.info("pausing autopilot for foreground task")
+            self.stop()
+        try:
+            yield
+        finally:
+            if was_running:
+                log.info("resuming autopilot")
+                self.start()
 
 
 def main() -> None:

@@ -199,8 +199,8 @@ def _build_llm(llm_class: Any, config: AgentConfig) -> Any:
     except ImportError as exc:
         raise RuntimeError(
             "CrewAI Azure provider dependencies are missing. Run "
-            "`make install-agent` or "
-            "`.venv/bin/pip install -e '.[agent]'`."
+            "`make install-brain-api` or "
+            "`.venv/bin/pip install -e '.[brain,agent]'`."
         ) from exc
 
 

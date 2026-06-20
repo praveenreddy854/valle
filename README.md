@@ -96,61 +96,6 @@ You can force mock mode with:
 VALLE_DRIVER=mock python -m valle.app
 ```
 
-## Digital twin (simulator)
-
-The digital twin runs the **real** Pi control server against a simulated
-robot in a simulated room, so the whole stack can be verified after every
-change without hardware. One process replaces both the Pi and its camera:
-
-```bash
-make sim
-```
-
-- Pi control API on `http://127.0.0.1:8080` (`driver: sim`) — the production
-  `valle.app` code: sessions, reflex gate, watchdogs, every endpoint.
-- Simulated camera on `http://127.0.0.1:8081/stream.mjpg` — a first-person
-  MJPEG render of the room from the robot's pose.
-- Visual test UI at `http://127.0.0.1:8080/sim/ui` — the robot camera next to
-  a live top-down room map (walls, door lock state, objects, robot heading and
-  travel trail), with drive buttons, keyboard control (WASD/arrows, space to
-  stop), a door-lock toggle, and world reset.
-
-The default world is a 6 m x 5 m room containing a brown **door with a
-deadbolt lock** on the north wall (horizontal gold bar = locked, vertical =
-unlocked), a yellow **lemon** on the floor to seek, and a box obstacle.
-Driving any endpoint (`/forward`, autopilot, agent intents) moves the
-simulated robot; walls block it; the camera view updates live.
-
-Point the Mac-side brain services at the twin and everything runs unchanged:
-
-```bash
-VALLE_PI_BASE_URL=http://127.0.0.1:8080 \
-VALLE_CAMERA_URL=http://127.0.0.1:8081/stream.mjpg \
-make find
-curl "http://127.0.0.1:8080/seek?object=lemon"
-```
-
-Ground-truth endpoints for verification scripts (served by the sim API):
-
-```text
-GET  /sim/state           robot pose, driver action, door lock, object
-                          distances and bearings
-POST /sim/door            {"locked": true|false}
-POST /sim/reset           restore the start pose and door state
-```
-
-`tests/test_sim.py` runs the end-to-end verification on every `make test`:
-momentary commands move the simulated robot, agent intents are vetoed without
-fresh reflex readings, executed with them, and blocked in front of walls, and
-the renderer shows the lemon and the lock state.
-
-| Environment variable | Default |
-| --- | --- |
-| `VALLE_PORT` | `8080` (sim Pi API) |
-| `VALLE_CAMERA_PORT` | `8081` (sim camera) |
-| `VALLE_CAMERA_WIDTH` / `VALLE_CAMERA_HEIGHT` | `640` / `480` |
-| `VALLE_SIM_FPS` | `10` |
-
 ## Configuration
 
 | Environment variable | Default |
@@ -247,18 +192,28 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 
 ## Autopilot (off-device brain)
 
-Autopilot runs as a **separate service on a more powerful machine** (e.g., a Mac mini). The Pi only owns the session, the safety watchdogs, and the motors. The brain pulls MJPEG frames from the Pi, runs monocular depth, and sends drive commands back inside an `/autopilot` session.
+Autopilot runs **off-device on a more powerful machine** (e.g., a Mac mini) as
+part of the brain API. The Pi only owns the session, the safety watchdogs, and
+the motors. The brain pulls MJPEG frames from the Pi, runs monocular depth, and
+sends drive commands back inside an `/autopilot` session. You start and stop it
+through the brain API rather than as a standalone process (see
+[Mac side: brain API](#mac-side-brain-api)).
 
 See `docs/adr/0001-reflex-uses-depth-not-object-detection.md` for why perception is depth-based rather than object-detection-based.
 
-### Pi side: camera streamer
+### Pi side: camera
 
-A separate process exposes the Pi camera as MJPEG so the streaming connection cannot block the motor controller:
+`make app` runs the camera in the **same process** as the motor controller. The
+MJPEG server still listens on its own port (and its own thread), so a streaming
+client can never block a motor command:
 
 ```bash
 sudo apt install -y python3-picamera2
-VALLE_CAMERA_PORT=8081 python3 -m valle.camera
+make app
 ```
+
+If picamera2 is not installed (e.g. when running off the Pi), the camera is
+skipped and the motor API still starts.
 
 | Environment variable | Default |
 | --- | --- |
@@ -349,17 +304,17 @@ still ends the session immediately.
 The agent loop lives off-device in `valle.brain.agent`. It uses CrewAI with
 Azure OpenAI, while Valle's Pi still gates movement through `/agent/*`.
 
-Install the CrewAI agent extra:
+Install the brain API extras (CrewAI agent + depth/detector):
 
 ```bash
-make install-agent
+make install-brain-api
 ```
 
 Valle uses Python 3.12. If `python3.12` is not your default interpreter, pass it
 explicitly:
 
 ```bash
-VENV_PY=python3.12 make install-agent
+VENV_PY=python3.12 make install-brain-api
 ```
 
 Run a one-off inspection mission:
@@ -396,12 +351,13 @@ While a mission runs, the runner also feeds the Pi's reflex gate: a background
 perception loop pulls camera frames from `VALLE_CAMERA_URL`, runs monocular
 depth, and posts clearance readings to `POST /agent/reflex` at
 `VALLE_BRAIN_TICK_HZ`. Without those readings every movement intent would be
-vetoed with `no_reflex_reading`. This is why `make install-agent` installs the
+vetoed with `no_reflex_reading`. This is why `make install-brain-api` installs the
 brain extras alongside CrewAI.
 
 ### Mac side: brain API
 
-The brain can also run as an HTTP API on the Mac:
+The brain API is the single Mac-side service. It serves find/seek, agent
+missions, the mission scheduler, the portal, and autopilot:
 
 ```bash
 make install-brain-api
@@ -409,6 +365,14 @@ make brain-api
 ```
 
 Default URL: `http://127.0.0.1:8090`.
+
+Start and stop continuous autopilot driving through it:
+
+```bash
+curl -X POST "http://127.0.0.1:8090/autopilot/start"
+curl        "http://127.0.0.1:8090/autopilot/status"
+curl -X POST "http://127.0.0.1:8090/autopilot/stop"
+```
 
 Optional settings:
 
@@ -481,18 +445,26 @@ Pi's session and reflex gates.
 
 ### Mac side: install and run the brain
 
-On the Mac (or any non-Pi host):
+Autopilot is part of the brain API. Install once, run the API, then start and
+stop autopilot through it:
 
 ```bash
 cd valle
-python3.12 -m venv .venv
-. .venv/bin/activate
-pip install -e .[brain]
+make install-brain-api
 
 export VALLE_PI_BASE_URL=http://rpi.local:8080
 export VALLE_CAMERA_URL=http://rpi.local:8081/stream.mjpg
-python -m valle.brain
+make brain-api
+
+# in another shell:
+curl -X POST http://127.0.0.1:8090/autopilot/start
+curl      http://127.0.0.1:8090/autopilot/status
+curl -X POST http://127.0.0.1:8090/autopilot/stop
 ```
+
+Starting a `/seek` or agent mission while autopilot is running automatically
+pauses autopilot for the duration and resumes it afterward (the Pi grants one
+motor session at a time).
 
 On first run the Depth Anything V2 Small model is downloaded from Hugging Face (~50 MB).
 
@@ -513,12 +485,18 @@ The thresholds and pulse durations almost certainly need tuning on the bench —
 
 ## Brain object find and seek (off-device)
 
-A brain-owned off-device service answers text-queried object lookups. It dials a WebSocket into the Pi and stays connected; the Pi exposes `/find?object=<text>` and proxies the request over that socket. The Mac is never directly addressable.
+> Most users should use the brain API's `/find` and `/seek` on port 8090
+> (see [Mac side: brain API](#mac-side-brain-api)). The path below is the
+> optional **Siri-facing** route: it lets a Shortcut hit the Pi directly at
+> `http://rpi.local:8080/find`, which the Pi proxies to the Mac over a
+> WebSocket. The Mac is never directly addressable.
+
+A brain-owned off-device service answers text-queried object lookups. It dials a WebSocket into the Pi and stays connected; the Pi exposes `/find?object=<text>` and proxies the request over that socket.
 
 On the Mac:
 
 ```bash
-make find
+python -m valle.brain.find
 ```
 
 On any client (Siri Shortcut, curl, browser):
@@ -543,7 +521,7 @@ curl "http://rpi.local:8080/find?object=toy"
 | `VALLE_MAX_RESULTS` | `5` |
 | `VALLE_FIND_TIMEOUT_SECONDS` | `10` (Pi-side; how long the Pi waits for a brain response) |
 
-`make find` runs the brain-owned object find service independently of `make brain` (autopilot). You can run both, just one, or neither.
+`python -m valle.brain.find` runs the Siri-facing object find service. It is independent of the brain API and of autopilot.
 
 ### `/seek` — drive around until found
 
@@ -574,4 +552,4 @@ curl "http://rpi.local:8080/seek?object=toy&max_seconds=30"
 | `VALLE_SEEK_DEFAULT_MAX_SECONDS` | `60` | Mac (used when request omits max_seconds) |
 | `VALLE_SEEK_PULSE_SECONDS` | `4.0` | Mac (long-pulse duration refreshed every tick so motion is continuous; must be ≤ Pi's `VALLE_MAX_DURATION_SECONDS`) |
 
-Seek requires `make find` to be running on the Mac (it loads OWLv2) **and** that the existing autopilot brain stack is installed (it shares depth + reflex code with `make brain`). You do not need to run `make brain` at the same time as `make find`; `/seek` starts and ends its own autopilot session over the same Pi API.
+This Siri-facing `/seek` requires `python -m valle.brain.find` running on the Mac (it loads OWLv2 and shares the depth + reflex stack). It starts and ends its own autopilot session over the Pi API, so you do not run autopilot separately at the same time.

@@ -292,13 +292,20 @@ def _register_brain_bridge(app: Flask, bridge: BrainBridge, config: ValleConfig)
 
 
 def main() -> None:
+    from .camera import start_camera_server
+
     config = ValleConfig.from_env()
     configure_logging("valle-pi")
     app = create_app(config)
     configure_tracing("valle-pi", flask_app=app)
     controller = app.config["VALLE_CONTROLLER"]
     _register_shutdown(controller)
-    app.run(host=config.host, port=config.port)
+    camera = start_camera_server()
+    try:
+        app.run(host=config.host, port=config.port)
+    finally:
+        if camera is not None:
+            camera.close()
 
 
 def _make_simple_handler(

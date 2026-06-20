@@ -1,38 +1,47 @@
 # Valle Architecture
 
-Valle is a small Raspberry Pi robot car with a local motor controller, a camera
-streamer, and off-device services for perception and task reasoning. The core
-design rule is that physical movement remains bounded and interruptible even
-when an AI agent is planning a scheduled inspection task.
+Valle is a small Raspberry Pi robot car with a local motor controller and
+off-device services for perception and task reasoning. The core design rule is
+that physical movement remains bounded and interruptible even when an AI agent
+is planning a scheduled inspection task.
+
+It runs as two processes:
+
+- **Pi (`make app`):** the control server plus the MJPEG camera. They share one
+  process, but the camera streamer keeps its own port and thread so a streaming
+  client can never block a motor command.
+- **Mac (`make brain-api`):** the brain API, which hosts find/seek, the CrewAI
+  agent runner, the mission scheduler, the portal, and the autopilot loop
+  (started/stopped via `/autopilot/*`).
 
 ## Runtime Roles
 
 ```text
 Client / Scheduler
-  -> Pi control server
+  -> Pi control server (make app)
        -> ValleController
             -> ReflexGate
             -> MotorDriver
        -> BrainBridge
-  -> Camera server
-  -> Brain API
+       -> Camera streamer (own port + thread)
 
-Off-device services
-  -> Brain HTTP API
-  -> Reflex/perception updater
-  -> Brain agent mission runner (CrewAI + Azure OpenAI)
-  -> Brain object find / seek service
+Off-device, in the brain API (make brain-api)
+  -> Autopilot loop (depth-based reflex driving)
+  -> Find / seek
+  -> Agent mission runner (CrewAI + Azure OpenAI)
+  -> Mission scheduler
 ```
 
 The Pi is authoritative for motor safety. Off-device services can request work,
 send perception readings, or ask for bounded movement, but they do not directly
-drive GPIO pins.
+drive GPIO pins. The Pi grants one motor session at a time, so the brain API
+pauses autopilot while a foreground seek or agent mission runs, then resumes it.
 
 ## Observability
 
 Each service writes structured JSON logs and OpenTelemetry spans to local files
-under `logs/` by default. This includes the Pi control server, camera streamer,
-autopilot brain, brain API, brain find/seek service, and CrewAI agent runner.
+under `logs/` by default. This includes the Pi control server (with its camera),
+the brain API (autopilot, find/seek, scheduler), and the CrewAI agent runner.
 
 OpenTelemetry Flask and `requests` instrumentation captures inbound API calls
 and outbound Pi/brain HTTP calls. When `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
@@ -59,6 +68,9 @@ It exposes:
 - `POST /agent/run`
 - `POST /find`
 - `POST /seek`
+- `POST /autopilot/start`, `POST /autopilot/stop`, `GET /autopilot/status`:
+  start/stop the continuous depth-based autopilot loop. Foreground seek and
+  agent missions pause it automatically while they hold the Pi motor session.
 - `GET /runs` and `GET /runs/<run_id>`: agent mission run history.
 - `GET /evidence/<run_id>/<file>`: evidence images saved during a run.
 - `GET/POST /missions` and `DELETE /missions/<id>`: recurring scheduled
@@ -116,30 +128,6 @@ intent becomes a motor pulse only after the local reflex gate authorizes it.
 The agent loop itself lives in `valle.brain.agent` and uses CrewAI with Azure
 OpenAI. Object find and seek live in `valle.brain.find`. CrewAI owns the
 agent/task orchestration. Valle owns the tools that touch the robot.
-
-## Digital Twin
-
-`valle/sim` is a simulated stand-in for the physical robot used to verify
-changes without hardware. It keeps the production seams honest: the real
-`valle.app` Flask server runs with a `SimMotorDriver` (the same `MotorDriver`
-protocol as GPIO), and the camera URL serves an MJPEG render of a simulated
-room instead of the Pi camera. Everything above those two seams — controller,
-sessions, reflex gate, brain services, agent tools — runs unmodified.
-
-The world is a 2D room in meters: wall segments (including a door whose
-deadbolt is rendered horizontal when locked, vertical when unlocked), billboard
-objects such as a lemon to seek, and the robot pose integrated from the live
-motor state with wall collision. A raycast renderer produces the first-person
-view and a per-column depth buffer; `clearance_strips()` exposes ground-truth
-reflex readings so tests can exercise the agent gate deterministically without
-neural depth.
-
-`GET /sim/state`, `POST /sim/door`, and `POST /sim/reset` expose and mutate
-ground truth for verification scripts; `GET /sim/world` returns the static
-geometry. `GET /sim/ui` serves a browser page for visual testing: the camera
-stream beside a live top-down map (robot pose, heading, travel trail, door
-lock state) with manual drive controls. `tests/test_sim.py` drives the full Pi
-API against the twin in-process on every test run.
 
 ## Reflex Gate
 

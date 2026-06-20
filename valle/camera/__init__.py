@@ -10,11 +10,15 @@ import io
 import logging
 import os
 import socketserver
+import threading
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Condition
 
 from ..observability import setup_observability
+
+
+log = logging.getLogger("valle.camera")
 
 
 @dataclass(frozen=True)
@@ -96,20 +100,38 @@ class _ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
 
 
-def serve(config: CameraConfig | None = None) -> None:
+class CameraHandle:
+    """Owns the picamera2 recorder and MJPEG server so callers can shut down."""
+
+    def __init__(self, server: _ThreadedHTTPServer, picam2: object) -> None:
+        self._server = server
+        self._picam2 = picam2
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._picam2.stop_recording()  # type: ignore[attr-defined]
+
+
+def start_camera_server(config: CameraConfig | None = None) -> CameraHandle | None:
+    """Start the picamera2 recorder and MJPEG server on background threads.
+
+    Returns a :class:`CameraHandle`, or ``None`` when picamera2 is unavailable
+    (e.g. off the Pi) so the caller can run without a camera. The MJPEG server
+    runs on its own port and thread, never on the motor API's request threads.
+    """
     config = config or CameraConfig.from_env()
-    setup_observability("valle-camera")
-    log = logging.getLogger("valle.camera")
 
     try:
         from picamera2 import Picamera2
         from picamera2.encoders import MJPEGEncoder
         from picamera2.outputs import FileOutput
-    except ImportError as exc:
-        raise RuntimeError(
-            "picamera2 is not installed. Install it on the Raspberry Pi via "
-            "`sudo apt install -y python3-picamera2`."
-        ) from exc
+    except ImportError:
+        log.warning(
+            "picamera2 is not installed; camera stream disabled. Install it on "
+            "the Raspberry Pi via `sudo apt install -y python3-picamera2`."
+        )
+        return None
 
     picam2 = Picamera2()
     video_config = picam2.create_video_configuration(
@@ -120,6 +142,10 @@ def serve(config: CameraConfig | None = None) -> None:
 
     output = _StreamingOutput()
     picam2.start_recording(MJPEGEncoder(), FileOutput(output))
+    server = _ThreadedHTTPServer((config.host, config.port), _make_handler(output))
+    threading.Thread(
+        target=server.serve_forever, name="valle-camera", daemon=True
+    ).start()
     log.info(
         "valle camera streaming on http://%s:%d/stream.mjpg (%dx%d @ %d fps)",
         config.host,
@@ -128,12 +154,22 @@ def serve(config: CameraConfig | None = None) -> None:
         config.height,
         config.framerate,
     )
-    server = _ThreadedHTTPServer((config.host, config.port), _make_handler(output))
+    return CameraHandle(server, picam2)
+
+
+def serve(config: CameraConfig | None = None) -> None:
+    config = config or CameraConfig.from_env()
+    setup_observability("valle-camera")
+    handle = start_camera_server(config)
+    if handle is None:
+        raise RuntimeError(
+            "picamera2 is not installed. Install it on the Raspberry Pi via "
+            "`sudo apt install -y python3-picamera2`."
+        )
     try:
-        server.serve_forever()
+        threading.Event().wait()
     finally:
-        server.server_close()
-        picam2.stop_recording()
+        handle.close()
 
 
 def _env_int(name: str, default: int) -> int:

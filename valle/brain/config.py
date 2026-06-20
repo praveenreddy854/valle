@@ -46,8 +46,8 @@ class BrainConfig:
     @classmethod
     def from_env(cls) -> "BrainConfig":
         return cls(
-            pi_base_url=os.getenv("VALLE_PI_BASE_URL", cls.pi_base_url),
-            camera_url=os.getenv("VALLE_CAMERA_URL", cls.camera_url),
+            pi_base_url=_env_str("VALLE_PI_BASE_URL", cls.pi_base_url),
+            camera_url=_env_str("VALLE_CAMERA_URL", cls.camera_url),
             tick_hz=_env_float("VALLE_BRAIN_TICK_HZ", cls.tick_hz),
             grace_seconds=_env_float("VALLE_BRAIN_GRACE_SECONDS", cls.grace_seconds),
             request_timeout_seconds=_env_float(
@@ -55,8 +55,8 @@ class BrainConfig:
             ),
             session_max_seconds=_env_optional_float("VALLE_BRAIN_SESSION_MAX_SECONDS"),
             session_idle_seconds=_env_optional_float("VALLE_BRAIN_SESSION_IDLE_SECONDS"),
-            depth_model=os.getenv("VALLE_DEPTH_MODEL", cls.depth_model),
-            depth_device=os.getenv("VALLE_DEPTH_DEVICE", cls.depth_device),
+            depth_model=_env_str("VALLE_DEPTH_MODEL", cls.depth_model),
+            depth_device=_env_str("VALLE_DEPTH_DEVICE", cls.depth_device),
             blocked_threshold=_env_float(
                 "VALLE_BLOCKED_THRESHOLD", cls.blocked_threshold
             ),
@@ -76,6 +76,13 @@ class BrainConfig:
             speed_turn=_env_float("VALLE_SPEED_TURN", cls.speed_turn),
             speed_backward=_env_float("VALLE_SPEED_BACKWARD", cls.speed_backward),
         )
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value
 
 
 def _env_float(name: str, default: float) -> float:

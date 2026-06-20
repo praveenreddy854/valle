@@ -97,7 +97,7 @@ def _requests() -> Any:
         import requests
     except ImportError as exc:  # pragma: no cover - import guard for missing extra
         raise RuntimeError(
-            "requests is required for valle.brain.agent. Run `make install-agent` "
-            "or `.venv/bin/pip install -e '.[agent]'`."
+            "requests is required for valle.brain.agent. Run `make install-brain-api` "
+            "or `.venv/bin/pip install -e '.[brain,agent]'`."
         ) from exc
     return requests

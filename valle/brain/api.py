@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -8,6 +9,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from .agent.config import AgentConfig, normalize_mission
 from .agent.runner import _result_to_jsonable, run_agent
 from .evidence import evidence_root
+from .loop import AutopilotController
 from .portal import create_portal_blueprint
 from .runs import RunStore
 from .scheduler import MissionScheduler
@@ -17,17 +19,50 @@ from ..observability import configure_logging, configure_tracing, get_tracer
 log = logging.getLogger("valle.brain.api")
 
 
-def create_app(scheduler: MissionScheduler | None = None) -> Flask:
+def create_app(
+    scheduler: MissionScheduler | None = None,
+    autopilot: AutopilotController | None = None,
+) -> Flask:
     app = Flask(__name__)
     app.register_blueprint(create_portal_blueprint())
     services = BrainApiServices()
     runs = RunStore.from_env()
+    autopilot = autopilot or AutopilotController()
+    # The Pi grants one motor session at a time, so foreground tasks (seek,
+    # agent missions) run one-at-a-time and pause autopilot while they hold it.
+    task_lock = threading.Lock()
+
+    def borrow_motor_session(run: Any) -> Any:
+        with task_lock, autopilot.paused():
+            return run()
+
+    def run_scheduled_mission(mission: dict[str, Any]) -> None:
+        with get_tracer(__name__).start_as_current_span(
+            "brain.scheduled_mission"
+        ) as span:
+            span.set_attribute("mission.goal", str(mission.get("goal", "")))
+            borrow_motor_session(lambda: run_agent(AgentConfig.from_env(), mission))
+
     if scheduler is None:
-        scheduler = MissionScheduler.from_env(_run_scheduled_mission)
+        scheduler = MissionScheduler.from_env(run_scheduled_mission)
+    app.config["VALLE_SCHEDULER"] = scheduler
+    app.config["VALLE_AUTOPILOT"] = autopilot
 
     @app.get("/health")
     def health() -> Any:
         return jsonify({"ok": True, "service": "valle.brain.api"})
+
+    @app.post("/autopilot/start")
+    def autopilot_start() -> Any:
+        return jsonify({"ok": True, **autopilot.start()})
+
+    @app.post("/autopilot/stop")
+    def autopilot_stop() -> Any:
+        return jsonify({"ok": True, **autopilot.stop()})
+
+    @app.get("/autopilot/status")
+    def autopilot_status() -> Any:
+        return jsonify({"ok": True, **autopilot.status()})
 
     @app.post("/agent/run")
     def agent_run() -> Any:
@@ -36,7 +71,9 @@ def create_app(scheduler: MissionScheduler | None = None) -> Flask:
             try:
                 mission = normalize_mission(body)
                 span.set_attribute("mission.goal", mission["goal"])
-                result = run_agent(AgentConfig.from_env(), mission)
+                result = borrow_motor_session(
+                    lambda: run_agent(AgentConfig.from_env(), mission)
+                )
             except ValueError as exc:
                 return _error(str(exc), status=400)
             except RuntimeError as exc:
@@ -76,8 +113,10 @@ def create_app(scheduler: MissionScheduler | None = None) -> Flask:
                 speed = _optional_float(body, "speed")
                 if max_seconds is not None:
                     span.set_attribute("seek.max_seconds", max_seconds)
-                result = services.seek(
-                    object_query.strip(), max_seconds=max_seconds, speed=speed
+                result = borrow_motor_session(
+                    lambda: services.seek(
+                        object_query.strip(), max_seconds=max_seconds, speed=speed
+                    )
                 )
             except ValueError as exc:
                 return _error(str(exc), status=400)
@@ -165,17 +204,11 @@ class BrainApiServices:
             except ImportError as exc:
                 raise RuntimeError(
                     "brain find/seek dependencies are missing. "
-                    "Run `make install-brain`."
+                    "Run `make install-brain-api`."
                 ) from exc
             self._find_server = build_server()
             self._find_server.load()
         return self._find_server
-
-
-def _run_scheduled_mission(mission: dict[str, Any]) -> None:
-    with get_tracer(__name__).start_as_current_span("brain.scheduled_mission") as span:
-        span.set_attribute("mission.goal", str(mission.get("goal", "")))
-        run_agent(AgentConfig.from_env(), mission)
 
 
 def main() -> None:
@@ -183,14 +216,16 @@ def main() -> None:
 
     config = BrainApiConfig.from_env()
     configure_logging("valle-brain-api")
-    scheduler = MissionScheduler.from_env(_run_scheduled_mission)
-    app = create_app(scheduler)
+    app = create_app()
     configure_tracing("valle-brain-api", flask_app=app)
+    scheduler = app.config["VALLE_SCHEDULER"]
+    autopilot = app.config["VALLE_AUTOPILOT"]
     scheduler.start()
     try:
         app.run(host=config.host, port=config.port)
     finally:
         scheduler.stop()
+        autopilot.stop()
 
 
 def _json_body() -> dict[str, Any]:
