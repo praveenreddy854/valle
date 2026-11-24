@@ -553,3 +553,35 @@ curl "http://rpi.local:8080/seek?object=toy&max_seconds=30"
 | `VALLE_SEEK_PULSE_SECONDS` | `4.0` | Mac (long-pulse duration refreshed every tick so motion is continuous; must be ≤ Pi's `VALLE_MAX_DURATION_SECONDS`) |
 
 This Siri-facing `/seek` requires `python -m valle.brain.find` running on the Mac (it loads OWLv2 and shares the depth + reflex stack). It starts and ends its own autopilot session over the Pi API, so you do not run autopilot separately at the same time.
+
+## Household autonomy
+
+Valle's agent missions can use built-in skills, rules you set, and what it learned on earlier runs.
+
+**Skills** (`GET /skills`): `check_door_locks`, `vacuum_prep`, `scout`. A mission that names a skill gets that skill's checklist and default targets.
+
+**Household rules and places**: you write these, and they're added to every mission prompt. They guide the planner. The Pi reflex gate is still the hard safety limit.
+
+```bash
+curl -X PUT http://127.0.0.1:8090/household -H 'content-type: application/json' -d '{
+  "rules": ["Never enter the nursery", "Do not drive onto the white rug"],
+  "places": {"front_door": "end of the hallway past the stairs",
+             "back_door": "kitchen, left of the fridge"},
+  "vacuum": {"start": "23:30", "areas": ["living room", "kitchen"]}
+}'
+```
+
+**Scene inspection**: the `inspect_scene` tool sends the current camera frame to a vision model. That answers questions like whether a door is closed and whether the deadbolt is engaged. Set `VALLE_VISION_DEPLOYMENT` to use a different vision-capable deployment. If it's not set, `AZURE_OPENAI_DEPLOYMENT` is used.
+
+**Learning**: the agent saves reusable lessons with `remember_lesson`, and each run starts with those lessons plus a summary of the last few similar runs. You can review lessons with `GET /memory` and delete one with `DELETE /memory/<id>`. They're stored in `VALLE_LESSONS_FILE`, which defaults to `logs/agent-lessons.jsonl`.
+
+**Findings**: the agent records hazards, suggestions and observations with `record_finding`. You can list them with `GET /findings`, and hazards and suggestions also go into push notifications.
+
+Nightly example, scheduled 30 minutes before the vacuum:
+
+```bash
+curl -X POST http://127.0.0.1:8090/missions -H 'content-type: application/json' \
+  -d '{"schedule": "23:00", "goal": "clear the floor for the robot vacuum", "skill": "vacuum_prep"}'
+curl -X POST http://127.0.0.1:8090/missions -H 'content-type: application/json' \
+  -d '{"schedule": "22:00", "goal": "check front and back doors are closed and bolted", "skill": "check_door_locks"}'
+```

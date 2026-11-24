@@ -9,6 +9,9 @@ from flask import Flask, jsonify, request, send_from_directory
 from .agent.config import AgentConfig, normalize_mission
 from .agent.runner import _result_to_jsonable, run_agent
 from .evidence import evidence_root
+from .household import HouseholdStore
+from .memory import LessonStore
+from .skills import SKILLS
 from .loop import AutopilotController
 from .portal import create_portal_blueprint
 from .runs import RunStore
@@ -149,6 +152,41 @@ def create_app(
         if directory != root and root not in directory.parents:
             return _error("run not found", status=404)
         return send_from_directory(directory, filename)
+
+    @app.get("/household")
+    def get_household() -> Any:
+        return jsonify({"ok": True, "household": HouseholdStore.from_env().get()})
+
+    @app.put("/household")
+    def put_household() -> Any:
+        try:
+            profile = HouseholdStore.from_env().put(_json_body())
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        return jsonify({"ok": True, "household": profile})
+
+    @app.get("/skills")
+    def list_skills() -> Any:
+        return jsonify({"ok": True, "skills": SKILLS})
+
+    @app.get("/memory")
+    def list_memory() -> Any:
+        return jsonify({"ok": True, "lessons": LessonStore.from_env().list()})
+
+    @app.delete("/memory/<lesson_id>")
+    def forget_lesson(lesson_id: str) -> Any:
+        if not LessonStore.from_env().remove(lesson_id):
+            return _error("lesson not found", status=404)
+        return jsonify({"ok": True, "removed": lesson_id})
+
+    @app.get("/findings")
+    def list_findings() -> Any:
+        findings = [
+            {**f, "run_id": r.get("run_id"), "at": r.get("started_at")}
+            for r in runs.list(limit=50)
+            for f in r.get("findings") or []
+        ]
+        return jsonify({"ok": True, "findings": findings})
 
     @app.get("/missions")
     def list_missions() -> Any:

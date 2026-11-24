@@ -9,6 +9,9 @@ from typing import Any
 
 from .config import AgentConfig, load_mission
 from ..evidence import EvidenceStore
+from ..household import HouseholdStore, household_prompt
+from ..memory import LessonStore, memory_prompt, similar_runs
+from ..skills import apply_skill, skill_prompt
 from ..notify import notify_mission_result
 from ..runs import RunStore, new_run_id
 from ...observability import get_tracer, setup_observability
@@ -32,18 +35,28 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         CaptureEvidenceTool,
         DrivePulseTool,
         FindObjectTool,
+        InspectSceneTool,
         ObserveTool,
+        RecordFindingTool,
         RecordInspectionResultTool,
+        RememberLessonTool,
         StartAgentSessionTool,
         StopAgentSessionTool,
     )
 
+    from ..vision import SceneInspector
+
+    mission = apply_skill(mission)
     client = AgentPiClient(config.pi_base_url)
     client.validate_agent_api()
     perception = _build_perception(client)
     run_id = new_run_id()
     runs = RunStore.from_env()
     evidence = EvidenceStore.from_env(run_id)
+    lessons = LessonStore.from_env()
+    context = build_mission_context(
+        mission, HouseholdStore.from_env().get(), lessons, runs.list(limit=200)
+    )
     state = AgentSessionState()
     tools = [
         StartAgentSessionTool(client=client, mission=mission, state=state),
@@ -51,6 +64,11 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         DrivePulseTool(client=client, state=state),
         FindObjectTool(perception=perception),
         CaptureEvidenceTool(perception=perception, evidence=evidence),
+        InspectSceneTool(
+            perception=perception, inspector=SceneInspector.from_config(config)
+        ),
+        RecordFindingTool(state=state),
+        RememberLessonTool(lessons=lessons, mission=mission, run_id=run_id),
         StopAgentSessionTool(client=client, state=state),
         RecordInspectionResultTool(mission=mission, state=state),
     ]
@@ -82,12 +100,17 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
             "Task: {task}\n"
             "Skill: {skill}\n"
             "Targets: {targets}\n\n"
+            "{context}\n\n"
             "Start an agent session, observe the robot status, use find_object "
             "to look for mission targets, and request only short reflex-gated "
             "drive pulses when movement is needed (pivot toward the target's "
             "reported position, then approach). Save camera frames with "
             "capture_evidence at inspection viewpoints and reference the saved "
-            "files in the result. Record the inspection result, stop the "
+            "files in the result. Use inspect_scene for state questions (is the "
+            "door closed, is the bolt engaged, what is on the floor). Record "
+            "hazards and suggestions with record_finding, and save reusable "
+            "lessons (good viewpoints, layout) with remember_lesson. Follow the "
+            "household rules. Record the inspection result, stop the "
             "session, and then provide a concise final summary. If evidence is "
             "insufficient, record an uncertain result instead of guessing."
         ),
@@ -114,7 +137,7 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         error: str | None = None
         perception.start()
         try:
-            return crew.kickoff(inputs=_crew_inputs(mission))
+            return crew.kickoff(inputs={**_crew_inputs(mission), "context": context})
         except Exception as exc:
             error = str(exc)
             raise
@@ -133,6 +156,7 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
                 "status": "failed" if error else "completed",
                 "error": error,
                 "result": state.result,
+                "findings": state.findings,
                 "evidence": evidence.items(),
             }
             try:
@@ -140,6 +164,20 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
                 notify_mission_result(record)
             except Exception:
                 log.exception("failed to record mission run %s", run_id)
+
+
+def build_mission_context(
+    mission: dict[str, Any],
+    household: dict[str, Any],
+    lessons: LessonStore,
+    past_runs: list[dict[str, Any]],
+) -> str:
+    parts = [
+        skill_prompt(mission),
+        household_prompt(household),
+        memory_prompt(lessons.relevant(mission), similar_runs(past_runs, mission)),
+    ]
+    return "\n\n".join(p for p in parts if p) or "No extra context."
 
 
 def main() -> None:

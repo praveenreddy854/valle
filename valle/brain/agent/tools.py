@@ -20,6 +20,7 @@ class AgentSessionState:
     def __init__(self) -> None:
         self.session_id: str | None = None
         self.result: dict[str, Any] | None = None
+        self.findings: list[dict[str, Any]] = []
 
 
 class StartAgentSessionInput(BaseModel):
@@ -210,6 +211,102 @@ class RecordInspectionResultTool(BaseTool):
         }
         self.state.result = result
         return _json({"ok": True, "result": result})
+
+
+class InspectSceneInput(BaseModel):
+    question: str = Field(
+        description="State question about the current view, e.g. 'Is the deadbolt engaged?'"
+    )
+
+
+class InspectSceneTool(BaseTool):
+    name: str = "inspect_scene"
+    description: str = (
+        "Ask a vision model a question about the current camera frame, e.g. "
+        "whether a door is ajar, a deadbolt is engaged, or what small items are "
+        "on the floor. Returns answer, confidence, and observations."
+    )
+    args_schema: Type[BaseModel] = InspectSceneInput
+    perception: Any
+    inspector: Any
+
+    def _run(self, question: str) -> str:
+        image = self.perception.latest_image()
+        if image is None:
+            return _json({"ok": False, "error": "no camera frame available"})
+        try:
+            return _json({"ok": True, **self.inspector.inspect(image, question)})
+        except Exception as exc:
+            return _json({"ok": False, "error": str(exc)})
+
+
+class RecordFindingInput(BaseModel):
+    kind: str = Field(description="One of hazard, suggestion, or observation.")
+    item: str = Field(description="What was found, e.g. 'plush toy with fur'.")
+    location: str = Field(default="", description="Where, e.g. 'living room rug'.")
+    detail: str = Field(default="", description="Why it matters or what to do.")
+    evidence: list[str] = Field(default_factory=list)
+
+
+class RecordFindingTool(BaseTool):
+    name: str = "record_finding"
+    description: str = (
+        "Record something noticed while inspecting: a hazard (e.g. a vacuum "
+        "blocker), a suggestion for the owner, or a plain observation."
+    )
+    args_schema: Type[BaseModel] = RecordFindingInput
+    state: AgentSessionState
+
+    def _run(
+        self,
+        kind: str,
+        item: str,
+        location: str = "",
+        detail: str = "",
+        evidence: list[str] | None = None,
+    ) -> str:
+        if kind not in {"hazard", "suggestion", "observation"}:
+            return _json({"ok": False, "error": "kind must be hazard, suggestion, or observation"})
+        finding = {
+            "kind": kind,
+            "item": item,
+            "location": location,
+            "detail": detail,
+            "evidence": evidence or [],
+        }
+        self.state.findings.append(finding)
+        return _json({"ok": True, "finding": finding})
+
+
+class RememberLessonInput(BaseModel):
+    lesson: str = Field(
+        description="Durable, reusable knowledge for future runs, e.g. 'Back door "
+        "bolt is only readable from ~1 m, slightly left of center.'"
+    )
+    target: str = Field(default="", description="Related target, if any.")
+
+
+class RememberLessonTool(BaseTool):
+    name: str = "remember_lesson"
+    description: str = (
+        "Save a lesson for future runs: layout, good viewpoints, what worked "
+        "or failed. Do not save one-off observations."
+    )
+    args_schema: Type[BaseModel] = RememberLessonInput
+    lessons: Any
+    mission: dict[str, Any]
+    run_id: str
+
+    def _run(self, lesson: str, target: str = "") -> str:
+        if not lesson.strip():
+            return _json({"ok": False, "error": "lesson is required"})
+        record = self.lessons.add(
+            lesson,
+            skill=str(self.mission.get("skill", "")),
+            target=target,
+            run_id=self.run_id,
+        )
+        return _json({"ok": True, "lesson": record})
 
 
 def _session_id(state: AgentSessionState) -> str:

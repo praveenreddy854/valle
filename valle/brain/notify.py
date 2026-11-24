@@ -52,6 +52,10 @@ def notify_mission_result(record: dict[str, Any]) -> bool:
             lines.append(str(result["summary"]))
         if result.get("needs_followup"):
             lines.append("Needs follow-up.")
+    for finding in record.get("findings") or []:
+        if finding.get("kind") in {"hazard", "suggestion"}:
+            where = f" ({finding['location']})" if finding.get("location") else ""
+            lines.append(f"{finding['kind'].title()}: {finding.get('item')}{where}")
     if record.get("error"):
         lines.append(f"Error: {record['error']}")
     evidence = record.get("evidence") or []
