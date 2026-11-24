@@ -19,7 +19,45 @@ from ...observability import get_tracer, setup_observability
 log = logging.getLogger("valle.brain.agent")
 
 
+class _SetupDone:
+    """Set once the mission reaches kickoff, after which it records its own run."""
+
+    reached = False
+
+
 def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
+    marker = _SetupDone()
+    started_at = datetime.now().isoformat(timespec="seconds")
+    try:
+        return _run_agent(config, mission, marker)
+    except Exception as exc:
+        if not marker.reached:
+            _record_setup_failure(mission, started_at, exc)
+        raise
+
+
+def _record_setup_failure(
+    mission: dict[str, Any], started_at: str, exc: Exception
+) -> None:
+    record = {
+        "run_id": new_run_id(),
+        "mission": mission,
+        "started_at": started_at,
+        "ended_at": datetime.now().isoformat(timespec="seconds"),
+        "status": "failed",
+        "error": f"setup failed: {exc}",
+        "result": None,
+        "findings": [],
+        "evidence": [],
+    }
+    try:
+        RunStore.from_env().record(record)
+        notify_mission_result(record)
+    except Exception:
+        log.exception("failed to record setup failure")
+
+
+def _run_agent(config: AgentConfig, mission: dict[str, Any], marker: _SetupDone) -> Any:
     _prepare_crewai_runtime()
     try:
         from crewai import Agent, Crew, LLM, Process, Task
@@ -135,6 +173,7 @@ def run_agent(config: AgentConfig, mission: dict[str, Any]) -> Any:
         span.set_attribute("run.id", run_id)
         started_at = datetime.now().isoformat(timespec="seconds")
         error: str | None = None
+        marker.reached = True
         perception.start()
         try:
             return crew.kickoff(inputs={**_crew_inputs(mission), "context": context})
