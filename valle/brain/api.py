@@ -204,6 +204,22 @@ def create_app(
             return _error(str(exc), status=400)
         return jsonify({"ok": True, "mission": entry}), 201
 
+    @app.patch("/missions/<mission_id>")
+    def update_mission(mission_id: str) -> Any:
+        try:
+            entry = scheduler.update(mission_id, _json_body())
+        except ValueError as exc:
+            return _error(str(exc), status=400)
+        if entry is None:
+            return _error("mission not found", status=404)
+        return jsonify({"ok": True, "mission": entry})
+
+    @app.get("/portal/home")
+    def home_page() -> Any:
+        from .home_page import HOME_HTML
+
+        return HOME_HTML
+
     @app.delete("/missions/<mission_id>")
     def remove_mission(mission_id: str) -> Any:
         if not scheduler.remove(mission_id):

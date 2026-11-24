@@ -79,6 +79,26 @@ class MissionScheduler:
                 self._save()
         return removed
 
+    def update(self, mission_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+        schedule = changes.get("schedule")
+        if schedule is not None and (
+            not isinstance(schedule, str) or not _SCHEDULE_PATTERN.match(schedule)
+        ):
+            raise ValueError("schedule must be HH:MM (24-hour)")
+        enabled = changes.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise ValueError("enabled must be true or false")
+        with self._lock:
+            for entry in self._entries:
+                if entry["id"] == mission_id:
+                    if schedule is not None:
+                        entry["schedule"] = schedule
+                    if enabled is not None:
+                        entry["enabled"] = enabled
+                    self._save()
+                    return dict(entry)
+        return None
+
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
             return [dict(entry) for entry in self._entries]

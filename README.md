@@ -585,3 +585,7 @@ curl -X POST http://127.0.0.1:8090/missions -H 'content-type: application/json' 
 curl -X POST http://127.0.0.1:8090/missions -H 'content-type: application/json' \
   -d '{"schedule": "22:00", "goal": "check front and back doors are closed and bolted", "skill": "check_door_locks"}'
 ```
+
+**Home console**: open `http://127.0.0.1:8090/portal/home` to edit rules and places, pause or resume scheduled missions, and review recent runs (with evidence links) and findings. `PATCH /missions/<id>` with `{"enabled": false}` or `{"schedule": "HH:MM"}` does the same over the API.
+
+**Alerts**: failed runs, results that need follow-up (for example an unlocked or ajar door), and runs that found hazards are sent with ntfy `Priority: high`.
