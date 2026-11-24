@@ -90,3 +90,21 @@ class AgentRunnerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunAgentSetupFailureTest(unittest.TestCase):
+    def test_setup_failure_is_recorded_and_notified(self) -> None:
+        import tempfile
+        from valle.brain.agent import runner
+        from valle.brain.runs import RunStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"VALLE_RUNS_FILE": f"{tmp}/r.jsonl"}), \
+                 patch.object(runner, "_run_agent", side_effect=RuntimeError("Pi offline")), \
+                 patch.object(runner, "notify_mission_result") as notify:
+                with self.assertRaises(RuntimeError):
+                    runner.run_agent(AgentConfig(), {"goal": "check doors"})
+                runs = RunStore.from_env().list()
+        self.assertEqual(runs[0]["status"], "failed")
+        self.assertIn("Pi offline", runs[0]["error"])
+        notify.assert_called_once()
