@@ -15,7 +15,7 @@ from typing import Any
 log = logging.getLogger("valle.brain.notify")
 
 
-def notify(title: str, message: str) -> bool:
+def notify(title: str, message: str, *, priority: str = "default") -> bool:
     url = os.getenv("VALLE_NOTIFY_URL", "").strip()
     if not url:
         return False
@@ -25,7 +25,7 @@ def notify(title: str, message: str) -> bool:
         response = requests.post(
             url,
             data=message.encode("utf-8"),
-            headers={"Title": title},
+            headers=_headers(title, priority),
             timeout=5,
         )
         response.raise_for_status()
@@ -61,4 +61,23 @@ def notify_mission_result(record: dict[str, Any]) -> bool:
     evidence = record.get("evidence") or []
     if evidence:
         lines.append(f"Evidence images: {len(evidence)} (run {record.get('run_id')})")
-    return notify(title, "\n".join(lines))
+    return notify(title, "\n".join(lines), priority=_priority(record))
+
+
+def _priority(record: dict[str, Any]) -> str:
+    result = record.get("result")
+    if record.get("status") == "failed" or (
+        isinstance(result, dict) and result.get("needs_followup")
+    ):
+        return "high"
+    if any(f.get("kind") == "hazard" for f in record.get("findings") or []):
+        return "high"
+    return "default"
+
+
+def _headers(title: str, priority: str) -> dict[str, str]:
+    headers = {"Title": title}
+    if priority == "high":
+        headers["Priority"] = "high"
+        headers["Tags"] = "warning"
+    return headers
