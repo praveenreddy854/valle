@@ -130,3 +130,21 @@ class ApiEndpointsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotifyPriorityTest(unittest.TestCase):
+    def _headers(self, record: dict) -> dict:
+        with patch.dict("os.environ", {"VALLE_NOTIFY_URL": "http://ntfy/x"}):
+            with patch("requests.post", return_value=Mock()) as post:
+                notify_mission_result(record)
+        return post.call_args.kwargs["headers"]
+
+    def test_followup_is_high_priority(self) -> None:
+        headers = self._headers({"status": "completed", "mission": {"goal": "doors"},
+                                 "result": {"state": "unlocked", "needs_followup": True}})
+        self.assertEqual(headers["Priority"], "high")
+
+    def test_all_clear_is_default(self) -> None:
+        headers = self._headers({"status": "completed", "mission": {"goal": "doors"},
+                                 "result": {"state": "secure"}})
+        self.assertNotIn("Priority", headers)
