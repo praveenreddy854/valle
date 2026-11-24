@@ -148,3 +148,19 @@ class NotifyPriorityTest(unittest.TestCase):
         headers = self._headers({"status": "completed", "mission": {"goal": "doors"},
                                  "result": {"state": "secure"}})
         self.assertNotIn("Priority", headers)
+
+
+class MissionPauseAndHomePageTest(unittest.TestCase):
+    def test_patch_pauses_mission_and_home_page_serves(self) -> None:
+        from valle.brain.api import create_app
+        from valle.brain.scheduler import MissionScheduler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scheduler = MissionScheduler(Path(tmp) / "m.json", Mock())
+            entry = scheduler.add("22:00", {"goal": "check doors"})
+            client = create_app(scheduler=scheduler).test_client()
+            r = client.patch(f"/missions/{entry['id']}", json={"enabled": False})
+            self.assertFalse(r.get_json()["mission"]["enabled"])
+            self.assertEqual(client.patch(f"/missions/{entry['id']}", json={"schedule": "9pm"}).status_code, 400)
+            self.assertEqual(client.patch("/missions/nope", json={}).status_code, 404)
+            self.assertIn("Valle Home", client.get("/portal/home").get_data(as_text=True))
