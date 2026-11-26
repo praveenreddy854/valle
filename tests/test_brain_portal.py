@@ -41,6 +41,22 @@ class BrainPortalTest(unittest.TestCase):
         self.assertTrue(tail_payload["ok"])
         self.assertEqual(tail_payload["lines"][0]["message"], "portal hello")
 
+    def test_portal_lists_metrics_files(self) -> None:
+        from valle.brain.api import create_app
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "valle-pi.metrics.jsonl").write_text(
+                json.dumps({"name": "valle.pi.motor_commands", "unit": "1", "value": 2}) + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"VALLE_LOG_DIR": temp_dir}):
+                client = create_app().test_client()
+                files = client.get("/portal/api/files").get_json()
+                tail = client.get("/portal/api/files/valle-pi.metrics.jsonl?tail=5").get_json()
+
+        self.assertEqual(files["files"][0]["kind"], "metrics")
+        self.assertEqual(tail["lines"][0]["value"], 2)
+
     def test_portal_rejects_path_traversal(self) -> None:
         try:
             from valle.brain.api import create_app

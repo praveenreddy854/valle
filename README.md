@@ -152,13 +152,44 @@ Before testing on the floor, lift the car so the wheels can spin freely and veri
 
 ## Logs and telemetry
 
-Every runnable Valle service configures file logging and OpenTelemetry tracing.
-By default:
+Every runnable Valle service configures file logging plus OpenTelemetry traces
+and metrics. By default:
 
 ```text
 logs/<service>.log
 logs/<service>.traces.jsonl
+logs/<service>.metrics.jsonl
 ```
+
+**Spans**
+
+| Span | Where | Key attributes |
+| --- | --- | --- |
+| `brain.seek` / `brain.find` / `brain.agent_run` | Brain | `result.found`, `result.reason`, `result.ticks`, `result.elapsed_seconds`, `result.error` |
+| `brain.seek.tick` / `brain.autopilot.tick` | Brain | `action`, `detect.seconds`, `depth.seconds`, `detections`, `detection.top_score` |
+| `brain.autopilot.session` | Brain | `ended_reason` |
+| `pi.motor.pulse` | Pi | `command`, `source` (`manual`/`autopilot`/`agent`), `speed_percent`, `duration_seconds` |
+| `pi.reflex.decision` | Pi | `direction`, `allowed`, `reason` |
+| `pi.session.start` / `pi.session.end` | Pi | `session.kind`, `session.ended_reason`, `session.duration_seconds` |
+
+**Metrics** (exported every `VALLE_OTEL_METRICS_INTERVAL_MS`; counters are deltas per export)
+
+| Metric | Meaning |
+| --- | --- |
+| `valle.brain.ticks`, `valle.brain.tick.duration` | Ticks by loop and action, and time to decide each one |
+| `valle.brain.depth.duration`, `valle.brain.detect.duration` | Depth and detection inference time |
+| `valle.brain.detection.top_score` | Best detector score per seek tick |
+| `valle.brain.blind_ticks`, `valle.brain.drive_failures` | Ticks with no fresh frame, failed drive requests |
+| `valle.brain.frames` | Camera frames the brain received (rate = camera FPS at the brain) |
+| `valle.brain.seeks`, `valle.brain.seek.duration` | Seek outcomes by `found` and `reason` |
+| `valle.pi.motor_commands` | Motor pulses by command and source |
+| `valle.pi.reflex_decisions` | Reflex gate allow/veto by direction and reason |
+| `valle.pi.sessions_ended` | Motor sessions ended, by kind and reason |
+| `valle.pi.camera.frames` | Frames the Pi camera encoded (rate = camera FPS at the source) |
+| `valle.host.cpu.temperature`, `valle.host.wifi.signal`, `valle.host.load.1m` | Host health on the Pi and brain (temperature and Wi-Fi on Linux only) |
+
+Battery voltage isn't measured: the Pi has no analog input, so it would need an
+ADC board.
 
 Useful settings:
 
@@ -173,7 +204,9 @@ Useful settings:
 | `VALLE_VERBOSE_SDK_LOGS` | `false` |
 | `VALLE_OTEL_ENABLED` | `true` |
 | `VALLE_OTEL_TRACES_FILE` | `logs/<service>.traces.jsonl` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset; when set, traces are also exported over OTLP/HTTP |
+| `VALLE_OTEL_METRICS_FILE` | `logs/<service>.metrics.jsonl` |
+| `VALLE_OTEL_METRICS_INTERVAL_MS` | `15000` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset; when set, traces and metrics are also exported over OTLP/HTTP |
 
 OpenTelemetry instruments Flask routes and outbound `requests` calls when the
 instrumentation packages are installed. Local trace files are JSONL so they can

@@ -6,7 +6,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from . import telemetry
 from .motors import MotorDriver
+from .observability import get_tracer
 from .reflex import ReflexGate
 
 
@@ -148,7 +150,7 @@ class ValleController:
                 low=0.0,
                 high=self._max_duration_seconds,
             )
-            self._pulse_locked(normalized, speed, duration)
+            self._traced_pulse_locked(normalized, speed, duration, source="manual")
             return self.status()
 
     def stop(self, *, reason: str = "manual") -> dict[str, Any]:
@@ -240,6 +242,11 @@ class ValleController:
             }
             if mission is not None:
                 result["mission"] = mission
+            with get_tracer(__name__).start_as_current_span("pi.session.start") as span:
+                span.set_attribute("session.id", session_id)
+                span.set_attribute("session.kind", kind)
+                span.set_attribute("session.max_seconds", max_s)
+                span.set_attribute("session.idle_seconds", idle_s)
             return result
 
     def autopilot_drive(
@@ -271,7 +278,7 @@ class ValleController:
                 low=0.0,
                 high=self._max_duration_seconds,
             )
-            self._pulse_locked(normalized, speed, duration)
+            self._traced_pulse_locked(normalized, speed, duration, source="autopilot")
 
             if normalized in PROGRESS_DIRECTIONS:
                 self._session_last_progress_monotonic = time.monotonic()
@@ -296,6 +303,13 @@ class ValleController:
             self._require_session_locked(session_id, kind="agent")
 
             decision = self._reflex_gate.decide(normalized)
+            telemetry.record_reflex_decision(
+                normalized, allowed=decision.allowed, reason=decision.reason
+            )
+            with get_tracer(__name__).start_as_current_span("pi.reflex.decision") as span:
+                span.set_attribute("direction", normalized)
+                span.set_attribute("allowed", decision.allowed)
+                span.set_attribute("reason", decision.reason)
             if not decision.allowed:
                 return {
                     "executed": False,
@@ -317,7 +331,7 @@ class ValleController:
                 low=0.0,
                 high=self._max_duration_seconds,
             )
-            self._pulse_locked(normalized, speed, duration)
+            self._traced_pulse_locked(normalized, speed, duration, source="agent")
 
             if normalized in PROGRESS_DIRECTIONS:
                 self._session_last_progress_monotonic = time.monotonic()
@@ -412,6 +426,17 @@ class ValleController:
             self._cancel_timer_locked()
             self._stop_locked(reason="shutdown")
         self._driver.close()
+
+    def _traced_pulse_locked(
+        self, command: str, speed_percent: float, duration: float, *, source: str
+    ) -> None:
+        with get_tracer(__name__).start_as_current_span("pi.motor.pulse") as span:
+            span.set_attribute("command", command)
+            span.set_attribute("source", source)
+            span.set_attribute("speed_percent", speed_percent)
+            span.set_attribute("duration_seconds", duration)
+            self._pulse_locked(command, speed_percent, duration)
+        telemetry.record_motor_command(command, source)
 
     def _pulse_locked(self, command: str, speed_percent: float, duration: float) -> None:
         self._cancel_timer_locked()
@@ -516,6 +541,16 @@ class ValleController:
         mapped = AUTOPILOT_END_REASONS.get(reason, AUTOPILOT_END_REASONS["manual"])
         if self._session is not None and self._session.kind == "agent":
             mapped = mapped.replace("autopilot_", "agent_", 1)
+        if self._session is not None:
+            telemetry.record_session_end(self._session.kind, mapped)
+            with get_tracer(__name__).start_as_current_span("pi.session.end") as span:
+                span.set_attribute("session.id", self._session.session_id)
+                span.set_attribute("session.kind", self._session.kind)
+                span.set_attribute("session.ended_reason", mapped)
+                span.set_attribute(
+                    "session.duration_seconds",
+                    round(time.monotonic() - self._session.started_at_monotonic, 3),
+                )
         self._cancel_hard_cap_locked()
         self._cancel_idle_watchdog_locked()
         self._sequence += 1

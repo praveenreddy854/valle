@@ -17,6 +17,7 @@ from .portal import create_portal_blueprint
 from .runs import RunStore
 from .scheduler import MissionScheduler
 from ..observability import configure_logging, configure_tracing, get_tracer
+from ..telemetry import register_host_gauges
 
 
 log = logging.getLogger("valle.brain.api")
@@ -84,7 +85,10 @@ def create_app(
             except Exception as exc:
                 log.exception("agent mission failed")
                 return _error(f"agent mission failed: {exc}", status=500)
-            return jsonify({"ok": True, "result": _result_to_jsonable(result)})
+            payload = _result_to_jsonable(result)
+            if isinstance(payload, dict):
+                _set_result_attributes(span, payload, ("state", "status", "run_id"))
+            return jsonify({"ok": True, "result": payload})
 
     @app.post("/find")
     def find() -> Any:
@@ -101,6 +105,10 @@ def create_app(
             except Exception as exc:
                 log.exception("find failed")
                 return _error(f"find failed: {exc}", status=500)
+            _set_result_attributes(span, result, ("found", "capture_seconds"))
+            span.set_attribute("find.results", len(result.get("results") or []))
+            if result.get("error"):
+                return _error(str(result["error"]), status=503)
             return jsonify({"ok": True, **result})
 
     @app.post("/seek")
@@ -128,6 +136,11 @@ def create_app(
             except Exception as exc:
                 log.exception("seek failed")
                 return _error(f"seek failed: {exc}", status=500)
+            _set_result_attributes(
+                span, result, ("found", "reason", "ticks", "elapsed_seconds", "score")
+            )
+            if result.get("error"):
+                return _error(str(result["error"]), status=503)
             return jsonify({"ok": True, **result})
 
     @app.get("/runs")
@@ -266,12 +279,16 @@ class BrainApiServices:
 
 
 def main() -> None:
+    from .agent.config import load_dotenv
     from .api_config import BrainApiConfig
 
+    # Load .env before any service reads its settings (seek, find, autopilot).
+    load_dotenv()
     config = BrainApiConfig.from_env()
     configure_logging("valle-brain-api")
     app = create_app()
     configure_tracing("valle-brain-api", flask_app=app)
+    register_host_gauges("valle-brain-api")
     scheduler = app.config["VALLE_SCHEDULER"]
     autopilot = app.config["VALLE_AUTOPILOT"]
     scheduler.start()
@@ -295,6 +312,15 @@ def _optional_float(body: dict[str, Any], key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} must be a number") from exc
+
+
+def _set_result_attributes(span: Any, result: dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        value = result.get(key)
+        if isinstance(value, (bool, int, float, str)):
+            span.set_attribute(f"result.{key}", value)
+    if result.get("error"):
+        span.set_attribute("result.error", str(result["error"]))
 
 
 def _error(message: str, *, status: int) -> tuple[Any, int]:
