@@ -256,6 +256,21 @@ def _crew_inputs(mission: dict[str, Any]) -> dict[str, str]:
 
 
 def _build_llm(llm_class: Any, config: AgentConfig) -> Any:
+    if config.llm_provider == "anthropic":
+        # Current Claude models reject sampling params, so no temperature here.
+        try:
+            return llm_class(
+                model=f"anthropic/{config.anthropic_model}",
+                api_key=config.anthropic_api_key,
+                max_tokens=16000,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "CrewAI Anthropic provider dependencies are missing. Run "
+                "`make install-brain-api` or "
+                "`.venv/bin/pip install -e '.[brain,agent]'`."
+            ) from exc
+
     if _uses_openai_v1_endpoint(config.azure_endpoint):
         return llm_class(
             model=config.azure_deployment,

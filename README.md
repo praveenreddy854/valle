@@ -2,20 +2,52 @@
 
 Valle is a standalone Raspberry Pi robot-car webhook service for Siri Shortcuts. It controls two DC motors through an L298N driver using `gpiozero`.
 
+![Valle system overview](docs/images/system-overview.svg)
+
+## What you need
+
+### Hardware
+
+| Item | Notes |
+| --- | --- |
+| Raspberry Pi (4 or 5) | Runs the motor API and camera stream. Raspberry Pi OS with Python 3.12. |
+| L298N dual H-bridge motor driver | Drives both motors. Remove the ENA/ENB jumpers so the Pi can control speed with PWM. |
+| 2 × DC gear motors + wheels, chassis, caster | A typical 2WD robot-car kit works. |
+| Raspberry Pi Camera Module (CSI) | Optional for Siri-only driving, but required for the camera stream, autopilot, find/seek and agent missions. |
+| Motor battery, 7–12 V | For example a 2S Li-ion pack or 6 × AA. Connects to the L298N `+12V`/`VS` and `GND`. |
+| Separate 5 V supply for the Pi | USB-C power bank or adapter. Don't power the Pi from the L298N's 5 V output. |
+| Female-to-female jumper wires | 7 signal/ground wires from the Pi header to the L298N. |
+
+### Software
+
+- **Pi:** Python 3.12, `python3-lgpio` (GPIO backend), `python3-picamera2` (camera), and `requirements.txt`. Set it up with `make install-pi`.
+- **Mac or another computer (optional, for the brain):** Python 3.12 and the `brain`/`agent` extras (PyTorch, transformers, OpenCV, CrewAI). Set them up with `make install-brain-api`.
+- **An LLM provider (optional):** only agent missions and vision checks need one. Choose it with `VALLE_LLM_PROVIDER` (see [Choosing the LLM provider](#choosing-the-llm-provider)).
+- **Network:** the Pi and the brain machine on the same LAN, with the Pi reachable as `rpi.local` (or set `VALLE_PI_BASE_URL` / `VALLE_CAMERA_URL`).
+- **Siri Shortcuts (optional):** an iPhone on the same network.
+
 ## Wiring
 
-Use BCM GPIO numbering.
+![Valle wiring diagram](docs/images/wiring.svg)
 
-| L298N pin | Raspberry Pi GPIO |
-| --- | --- |
-| ENA | GPIO12 |
-| IN1 | GPIO5 |
-| IN2 | GPIO6 |
-| ENB | GPIO13 |
-| IN3 | GPIO20 |
-| IN4 | GPIO21 |
+The pins use BCM GPIO numbering, with the physical header pin in parentheses.
 
-Connect the Pi ground to the L298N ground. Power the motors from a separate motor supply, not from the Pi. Remove the ENA/ENB jumpers if your L298N board has them, so PWM speed control can use GPIO12 and GPIO13.
+| L298N pin | Raspberry Pi GPIO | Purpose |
+| --- | --- | --- |
+| ENA | GPIO12 (pin 32) | Left motor speed (PWM) |
+| IN1 | GPIO5 (pin 29) | Left motor direction |
+| IN2 | GPIO6 (pin 31) | Left motor direction |
+| ENB | GPIO13 (pin 33) | Right motor speed (PWM) |
+| IN3 | GPIO20 (pin 38) | Right motor direction |
+| IN4 | GPIO21 (pin 40) | Right motor direction |
+| GND | GND (pin 39) | Common ground |
+| OUT1 / OUT2 | — | Left motor leads |
+| OUT3 / OUT4 | — | Right motor leads |
+| +12V / VS, GND | — | Motor battery + / − |
+
+The Pi ground, the L298N ground and the battery's negative terminal must all be connected together. Power the motors from the separate motor battery, never from the Pi. Remove the ENA/ENB jumpers if your L298N board has them, so the Pi can control speed with PWM on GPIO12 and GPIO13. Plug the camera ribbon into the Pi's CSI connector.
+
+The software already reverses motor direction to match the author's build (`valle/motors.py` swaps forward and backward). If `/forward` drives your car backward, swap the leads on OUT1/OUT2 and OUT3/OUT4. If only one wheel spins the wrong way, swap the leads on that motor only. Any pin can be remapped with the `VALLE_*_PIN` variables listed below.
 
 ## Install on Raspberry Pi
 
@@ -299,6 +331,24 @@ require the corresponding side strip to be clear, and bounded reverse pulses
 are allowed as an escape action once a fresh reading exists. Manual `/stop`
 still ends the session immediately.
 
+### Choosing the LLM provider
+
+Agent missions and vision checks (`inspect_scene`) use one LLM provider. Choose it with `VALLE_LLM_PROVIDER`:
+
+| `VALLE_LLM_PROVIDER` | Required settings | Optional settings |
+| --- | --- | --- |
+| `azure` (default) | `AZURE_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, and `AZURE_RESOURCE_NAME` or `AZURE_ENDPOINT` | `AZURE_API_VERSION`, `VALLE_VISION_DEPLOYMENT` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `VALLE_ANTHROPIC_MODEL` (default `claude-opus-5-5`), `VALLE_VISION_MODEL` |
+
+Example `.env` for Claude:
+
+```dotenv
+VALLE_LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+With Claude, vision checks return JSON that follows a fixed schema. If Claude refuses a request, Anthropic's server-side fallback retries it on another Claude model.
+
 ### Mac side: CrewAI agent runner
 
 The agent loop lives off-device in `valle.brain.agent`. It uses CrewAI with
@@ -320,7 +370,7 @@ VENV_PY=python3.12 make install-brain-api
 Run a one-off inspection mission:
 
 ```bash
-# Fill .env with AZURE_* and VALLE_PI_BASE_URL values.
+# Fill .env with VALLE_PI_BASE_URL and your LLM provider settings.
 .venv/bin/python -m valle.brain.agent "check the back door lock"
 ```
 

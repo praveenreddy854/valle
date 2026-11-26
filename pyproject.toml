@@ -34,7 +34,7 @@ brain = [
 ]
 # Mac-side scheduled inspection agent dependencies.
 agent = [
-  "crewai[azure-ai-inference]>=1.0,<2",
+  "crewai[azure-ai-inference,anthropic]>=1.0,<2",
   "requests>=2.31",
 ]
 

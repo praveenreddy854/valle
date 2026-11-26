@@ -1,4 +1,4 @@
-"""Vision-language scene inspection over Azure OpenAI.
+"""Vision-language scene inspection over Azure OpenAI or Anthropic Claude.
 
 Answers state questions an open-vocabulary detector cannot, e.g. "is the
 deadbolt engaged?" or "is the door ajar?". Returns structured JSON.
@@ -17,14 +17,33 @@ _SYSTEM = (
     "If the view is insufficient, say so in answer and use low confidence."
 )
 
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "confidence": {"type": "number"},
+        "observations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["answer", "confidence", "observations"],
+    "additionalProperties": False,
+}
+
 
 class SceneInspector:
-    def __init__(self, client: Any, model: str) -> None:
+    def __init__(self, client: Any, model: str, provider: str = "azure") -> None:
         self._client = client
         self._model = model
+        self._provider = provider
 
     @classmethod
     def from_config(cls, config: Any) -> "SceneInspector":
+        if config.llm_provider == "anthropic":
+            import anthropic
+
+            model = os.getenv("VALLE_VISION_MODEL") or config.anthropic_model
+            client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+            return cls(client, model, provider="anthropic")
+
         from openai import AzureOpenAI, OpenAI
 
         model = os.getenv("VALLE_VISION_DEPLOYMENT") or config.azure_deployment
@@ -45,7 +64,49 @@ class SceneInspector:
         ok, jpeg = cv2.imencode(".jpg", image_bgr)
         if not ok:
             raise RuntimeError("could not encode camera frame")
-        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode()
+        b64 = base64.b64encode(jpeg.tobytes()).decode()
+        if self._provider == "anthropic":
+            text = self._inspect_anthropic(b64, question)
+        else:
+            text = self._inspect_openai(b64, question)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"vision model returned non-JSON: {text[:200]}") from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError("vision model returned non-object JSON")
+        return parsed
+
+    def _inspect_anthropic(self, b64: str, question: str) -> str:
+        # Server-side fallback re-runs a refused request on another Claude model.
+        response = self._client.beta.messages.create(
+            model=self._model,
+            max_tokens=16000,
+            system=_SYSTEM,
+            betas=["server-side-fallback-2026-07-01"],
+            extra_body={
+                "fallbacks": "default",
+                "output_config": {"format": {"type": "json_schema", "schema": _SCHEMA}},
+            },
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                        },
+                        {"type": "text", "text": question},
+                    ],
+                }
+            ],
+        )
+        if response.stop_reason == "refusal":
+            raise RuntimeError("vision model refused the request")
+        return next((b.text for b in response.content if b.type == "text"), "")
+
+    def _inspect_openai(self, b64: str, question: str) -> str:
+        data_url = "data:image/jpeg;base64," + b64
         response = self._client.chat.completions.create(
             model=self._model,
             temperature=0,
@@ -61,11 +122,4 @@ class SceneInspector:
                 },
             ],
         )
-        text = response.choices[0].message.content or ""
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"vision model returned non-JSON: {text[:200]}") from exc
-        if not isinstance(parsed, dict):
-            raise RuntimeError("vision model returned non-object JSON")
-        return parsed
+        return response.choices[0].message.content or ""
