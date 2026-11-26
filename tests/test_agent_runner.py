@@ -49,6 +49,27 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(llm.kwargs["endpoint"], config.azure_endpoint)
         self.assertEqual(llm.kwargs["api_version"], "2024-06-01")
 
+    def test_anthropic_provider_uses_claude_model(self) -> None:
+        config = AgentConfig(
+            llm_provider="anthropic",
+            anthropic_api_key="key",
+            anthropic_model="claude-opus-5-5",
+        )
+
+        llm = _build_llm(FakeLLM, config)
+
+        self.assertEqual(llm.kwargs["model"], "anthropic/claude-opus-5-5")
+        self.assertEqual(llm.kwargs["api_key"], "key")
+        self.assertNotIn("temperature", llm.kwargs)
+
+    def test_anthropic_provider_requires_api_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ANTHROPIC_API_KEY"):
+            AgentConfig(llm_provider="anthropic").validate()
+
+    def test_unknown_provider_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "VALLE_LLM_PROVIDER"):
+            AgentConfig(llm_provider="gemini").validate()
+
     def test_pi_agent_api_probe_accepts_missing_goal_400(self) -> None:
         response = Mock(status_code=400, text='{"error":"mission goal is required"}')
         requests = Mock(post=Mock(return_value=response))

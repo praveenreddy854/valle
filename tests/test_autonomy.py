@@ -70,6 +70,26 @@ class MemoryTest(unittest.TestCase):
 
 
 class VisionTest(unittest.TestCase):
+    def test_anthropic_inspect_parses_json(self) -> None:
+        client = Mock()
+        client.beta.messages.create.return_value = SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text", text='{"answer": "locked", "confidence": 0.9, "observations": []}')],
+        )
+        inspector = SceneInspector(client, "claude-opus-5-5", provider="anthropic")
+        result = inspector.inspect(np.zeros((8, 8, 3), np.uint8), "bolt?")
+        self.assertEqual(result["answer"], "locked")
+        kwargs = client.beta.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "claude-opus-5-5")
+        self.assertEqual(kwargs["messages"][0]["content"][0]["type"], "image")
+
+    def test_anthropic_refusal_raises(self) -> None:
+        client = Mock()
+        client.beta.messages.create.return_value = SimpleNamespace(stop_reason="refusal", content=[])
+        inspector = SceneInspector(client, "claude-opus-5-5", provider="anthropic")
+        with self.assertRaises(RuntimeError):
+            inspector.inspect(np.zeros((8, 8, 3), np.uint8), "q")
+
     def _client(self, content: str) -> Mock:
         message = SimpleNamespace(content=content)
         client = Mock()

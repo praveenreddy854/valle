@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <rect width="900" height="360" fill="#ffffff"/>
+  <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#222">Valle system overview</text>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
+
+  <rect x="30" y="70" width="180" height="90" rx="10" fill="#eef" stroke="#557"/>
+  <text x="120" y="105" text-anchor="middle" font-weight="bold">iPhone / Siri</text>
+  <text x="120" y="125" text-anchor="middle" font-size="11">Shortcuts → GET /forward …</text>
+
+  <rect x="330" y="60" width="240" height="250" rx="10" fill="#e8f5ec" stroke="#1f7a3a" stroke-width="2"/>
+  <text x="450" y="88" text-anchor="middle" font-weight="bold" font-size="15">Raspberry Pi (make app)</text>
+  <text x="450" y="115" text-anchor="middle">Motor API  :8080</text>
+  <text x="450" y="135" text-anchor="middle">MJPEG camera  :8081</text>
+  <text x="450" y="155" text-anchor="middle" font-size="11">Reflex gate + watchdogs</text>
+  <rect x="360" y="190" width="80" height="50" rx="6" fill="#b3261e"/>
+  <text x="400" y="220" text-anchor="middle" fill="#fff">L298N</text>
+  <rect x="460" y="190" width="80" height="50" rx="6" fill="#333"/>
+  <text x="500" y="220" text-anchor="middle" fill="#fff">Camera</text>
+  <text x="450" y="280" text-anchor="middle" font-size="11">2 × DC motors</text>
+  <line x1="400" y1="240" x2="420" y2="268" stroke="#333" stroke-width="2"/>
+
+  <rect x="680" y="70" width="190" height="200" rx="10" fill="#fff6e0" stroke="#9a7a1c"/>
+  <text x="775" y="98" text-anchor="middle" font-weight="bold" font-size="15">Mac (optional)</text>
+  <text x="775" y="120" text-anchor="middle">make brain-api :8090</text>
+  <text x="775" y="145" text-anchor="middle" font-size="11">Depth autopilot</text>
+  <text x="775" y="162" text-anchor="middle" font-size="11">Find / seek</text>
+  <text x="775" y="179" text-anchor="middle" font-size="11">CrewAI agent missions</text>
+  <text x="775" y="196" text-anchor="middle" font-size="11">Scheduler + portal</text>
+  <text x="775" y="225" text-anchor="middle" font-size="11">→ Azure OpenAI</text>
+
+  <line x1="210" y1="115" x2="328" y2="115" stroke="#333" stroke-width="2" marker-end="url(#a)"/>
+  <text x="270" y="108" text-anchor="middle" font-size="11">HTTP (Wi-Fi)</text>
+  <line x1="680" y1="120" x2="572" y2="120" stroke="#333" stroke-width="2" marker-end="url(#a)"/>
+  <text x="625" y="112" text-anchor="middle" font-size="11">drive / reflex</text>
+  <line x1="572" y1="150" x2="680" y2="150" stroke="#333" stroke-width="2" marker-end="url(#a)"/>
+  <text x="625" y="168" text-anchor="middle" font-size="11">MJPEG frames</text>
+</svg>

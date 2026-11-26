@@ -15,6 +15,9 @@ class AgentConfig:
     azure_deployment: str = ""
     azure_endpoint: str = ""
     azure_api_version: str = "2024-06-01"
+    llm_provider: str = "azure"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-opus-5-5"
     max_steps: int = 20
 
     @classmethod
@@ -32,10 +35,19 @@ class AgentConfig:
             azure_deployment=deployment,
             azure_endpoint=endpoint,
             azure_api_version=os.getenv("AZURE_API_VERSION", cls.azure_api_version),
+            llm_provider=os.getenv("VALLE_LLM_PROVIDER", cls.llm_provider).strip().lower(),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            anthropic_model=os.getenv("VALLE_ANTHROPIC_MODEL") or cls.anthropic_model,
             max_steps=_env_int("VALLE_AGENT_MAX_STEPS", cls.max_steps),
         )
 
     def validate(self) -> None:
+        if self.llm_provider == "anthropic":
+            if not self.anthropic_api_key:
+                raise ValueError("missing required env vars: ANTHROPIC_API_KEY")
+            return
+        if self.llm_provider != "azure":
+            raise ValueError("VALLE_LLM_PROVIDER must be 'azure' or 'anthropic'")
         missing = []
         if not self.azure_api_key:
             missing.append("AZURE_API_KEY")
