@@ -15,7 +15,8 @@ from .config import BrainConfig
 from .depth import DepthEstimator
 from .frames import Frame, FrameReader
 from .policy import BACKWARD, FORWARD, LEFT, RIGHT, ReflexPolicy, StripLayout, reduce_to_strips
-from ..observability import setup_observability
+from .. import telemetry
+from ..observability import get_tracer, setup_observability
 
 
 log = logging.getLogger("valle.brain")
@@ -48,6 +49,11 @@ class Brain:
         self._stop_requested = True
 
     def run(self) -> None:
+        with get_tracer(__name__).start_as_current_span("brain.autopilot.session") as span:
+            reason = self._run()
+            span.set_attribute("ended_reason", reason)
+
+    def _run(self) -> str:
         self._stop_requested = False
         self._depth.load()
         self._frames.start()
@@ -60,7 +66,7 @@ class Brain:
         except SessionRejectedError as exc:
             log.error("Pi rejected session start: %s", exc)
             self._frames.stop()
-            return
+            return "rejected"
 
         session_id = session["session_id"]
         log.info(
@@ -80,6 +86,7 @@ class Brain:
 
                 frame = self._frames.latest()
                 if frame is None:
+                    telemetry.record_blind_tick("autopilot")
                     ended_reason = self._handle_blind(
                         session_id, blind_since, tick_started
                     )
@@ -91,12 +98,23 @@ class Brain:
 
                 blind_since = None
 
-                try:
-                    action = self._decide(frame)
-                except Exception:
-                    log.exception("perception error; pausing tick")
-                    self._sleep_remainder(tick_started, tick_interval)
-                    continue
+                with get_tracer(__name__).start_as_current_span("brain.autopilot.tick") as span:
+                    try:
+                        action = self._decide(frame)
+                    except Exception:
+                        log.exception("perception error; pausing tick")
+                        span.set_attribute("action", "error")
+                        self._sleep_remainder(tick_started, tick_interval)
+                        continue
+                    depth_seconds = time.monotonic() - tick_started
+                    span.set_attribute("action", action)
+                    span.set_attribute("depth.seconds", round(depth_seconds, 4))
+                    telemetry.record_tick(
+                        "autopilot",
+                        action=action,
+                        seconds=depth_seconds,
+                        depth_seconds=depth_seconds,
+                    )
 
                 if not self._send_drive(session_id, action):
                     ended_reason = "manual"
@@ -106,6 +124,7 @@ class Brain:
         finally:
             self._end(session_id, ended_reason)
             self._frames.stop()
+        return ended_reason
 
     def _decide(self, frame: Frame) -> str:
         depth = self._depth.infer(frame.image)
@@ -132,6 +151,7 @@ class Brain:
             return False
         except (requests.RequestException, PiClientError) as exc:
             log.warning("drive request failed: %s", exc)
+            telemetry.record_drive_failure("autopilot")
             return True  # transient; let next tick try again or grace fire
 
     def _handle_blind(

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .. import telemetry
+
 
 log = logging.getLogger("valle.brain.frames")
 
@@ -74,5 +76,6 @@ class FrameReader:
                         break
                     with self._lock:
                         self._latest = Frame(image=image, timestamp=time.monotonic())
+                    telemetry.record_frame_received()
             finally:
                 cap.release()

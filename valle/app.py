@@ -293,11 +293,13 @@ def _register_brain_bridge(app: Flask, bridge: BrainBridge, config: ValleConfig)
 
 def main() -> None:
     from .camera import start_camera_server
+    from .telemetry import register_host_gauges
 
     config = ValleConfig.from_env()
     configure_logging("valle-pi")
     app = create_app(config)
     configure_tracing("valle-pi", flask_app=app)
+    register_host_gauges("valle-pi")
     controller = app.config["VALLE_CONTROLLER"]
     _register_shutdown(controller)
     camera = start_camera_server()

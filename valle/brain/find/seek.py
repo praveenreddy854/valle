@@ -27,6 +27,8 @@ from ..policy import (
 )
 from .config import FindConfig
 from .detector import Detector
+from ... import telemetry
+from ...observability import get_tracer
 
 
 log = logging.getLogger("valle.brain.find.seek")
@@ -57,6 +59,30 @@ class SeekLoop:
         )
 
     def run(
+        self,
+        *,
+        object_query: str,
+        max_seconds: float,
+        speed: float | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        try:
+            result = self._run(object_query=object_query, max_seconds=max_seconds, speed=speed)
+        except Exception:
+            # Failed seeks still count toward outcome metrics.
+            telemetry.record_seek_result(
+                found=False, reason="error", seconds=time.monotonic() - started
+            )
+            raise
+        reason = str(result.get("reason") or ("error" if result.get("error") else "unknown"))
+        telemetry.record_seek_result(
+            found=bool(result.get("found")),
+            reason=reason,
+            seconds=float(result.get("elapsed_seconds") or 0.0),
+        )
+        return result
+
+    def _run(
         self,
         *,
         object_query: str,
@@ -110,6 +136,7 @@ class SeekLoop:
 
                 frame = frames.latest()
                 if frame is None:
+                    telemetry.record_blind_tick("seek")
                     if blind_since is None:
                         blind_since = now
                     elif now - blind_since >= self._brain.grace_seconds:
@@ -121,8 +148,33 @@ class SeekLoop:
                     continue
                 blind_since = None
 
-                detections = self._detector.detect(frame.image, object_query)
-                hit = self._first_above(detections, self._find.seek_found_score)
+                with get_tracer(__name__).start_as_current_span("brain.seek.tick") as span:
+                    span.set_attribute("tick", ticks)
+                    detect_started = time.monotonic()
+                    detections = self._detector.detect(frame.image, object_query)
+                    detect_seconds = time.monotonic() - detect_started
+                    top_score = max((d["score"] for d in detections), default=0.0)
+                    span.set_attribute("detect.seconds", round(detect_seconds, 4))
+                    span.set_attribute("detections", len(detections))
+                    span.set_attribute("detection.top_score", float(top_score))
+                    telemetry.record_detection_score("seek", float(top_score))
+                    hit = self._first_above(detections, self._find.seek_found_score)
+                    if hit is None:
+                        depth_started = time.monotonic()
+                        action = self._reflex_action(frame.image, policy)
+                        depth_seconds = time.monotonic() - depth_started
+                        span.set_attribute("depth.seconds", round(depth_seconds, 4))
+                        span.set_attribute("action", action)
+                    else:
+                        action, depth_seconds = "found", None
+                        span.set_attribute("action", "found")
+                    telemetry.record_tick(
+                        "seek",
+                        action=action,
+                        seconds=time.monotonic() - now,
+                        depth_seconds=depth_seconds,
+                        detect_seconds=detect_seconds,
+                    )
                 if hit is not None:
                     self._send_drive(session_id, "stop_pulse")
                     result.update(
@@ -138,15 +190,16 @@ class SeekLoop:
                     )
                     break
 
-                action = self._reflex_action(frame.image, policy)
                 tick_seconds = time.monotonic() - now
                 ok = self._send_drive(session_id, action, speed_override=speed)
+                if not ok:
+                    telemetry.record_drive_failure("seek")
                 log.info(
                     "tick %d action=%s detections=%d top_score=%.2f tick=%.2fs%s",
                     ticks,
                     action,
                     len(detections),
-                    max((d["score"] for d in detections), default=0.0),
+                    top_score,
                     tick_seconds,
                     "" if ok else " (drive failed)",
                 )

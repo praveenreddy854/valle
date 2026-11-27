@@ -10,6 +10,7 @@ from typing import Any
 
 
 _TRACING_CONFIGURED = False
+_METRICS_CONFIGURED = False
 _REQUESTS_INSTRUMENTED = False
 
 
@@ -102,6 +103,7 @@ def configure_tracing(service_name: str, *, flask_app: Any | None = None) -> Non
         trace.set_tracer_provider(provider)
         _TRACING_CONFIGURED = True
 
+    _configure_metrics(service_name)
     _instrument_requests()
     _instrument_logging()
     if flask_app is not None:
@@ -114,6 +116,69 @@ def get_tracer(name: str) -> Any:
     except ImportError:
         return _NoopTracer()
     return trace.get_tracer(name)
+
+
+def get_meter(name: str) -> Any:
+    """Return an OpenTelemetry meter; instruments are no-ops until metrics are configured."""
+    try:
+        from opentelemetry import metrics
+    except ImportError:
+        return _NoopMeter()
+    return metrics.get_meter(name)
+
+
+def _configure_metrics(service_name: str) -> None:
+    global _METRICS_CONFIGURED
+    if _METRICS_CONFIGURED:
+        return
+    try:
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource
+    except ImportError:
+        return
+
+    interval_ms = _env_int("VALLE_OTEL_METRICS_INTERVAL_MS", 15_000)
+    readers = [
+        PeriodicExportingMetricReader(
+            _JsonFileMetricExporter(service_name), export_interval_millis=interval_ms
+        )
+    ]
+    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if otlp_endpoint:
+        try:
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            readers.append(
+                PeriodicExportingMetricReader(
+                    OTLPMetricExporter(endpoint=_otlp_metrics_endpoint(otlp_endpoint)),
+                    export_interval_millis=interval_ms,
+                )
+            )
+        except ImportError:
+            logging.getLogger("valle.observability").warning(
+                "OTLP metric exporter is not installed; OTLP metrics disabled"
+            )
+
+    resource = Resource.create(
+        {"service.name": service_name, "service.version": _package_version()}
+    )
+    metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=readers))
+    _METRICS_CONFIGURED = True
+
+
+def _otlp_metrics_endpoint(endpoint: str) -> str:
+    # The README lets OTEL_EXPORTER_OTLP_ENDPOINT name either the base URL or the
+    # traces URL; metrics live next to traces at /v1/metrics.
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/v1/traces"):
+        return endpoint[: -len("/v1/traces")] + "/v1/metrics"
+    if endpoint.endswith("/v1/metrics"):
+        return endpoint
+    return endpoint + "/v1/metrics"
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -178,6 +243,94 @@ class _JsonFileSpanExporter:
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         return True
+
+
+def _JsonFileMetricExporter(service_name: str) -> Any:
+    from opentelemetry.sdk.metrics import Counter, Histogram
+    from opentelemetry.sdk.metrics.export import (
+        AggregationTemporality,
+        MetricExporter,
+        MetricExportResult,
+    )
+
+    log_dir = Path(os.getenv("VALLE_LOG_DIR", "logs"))
+    path = Path(
+        os.getenv("VALLE_OTEL_METRICS_FILE", str(log_dir / f"{service_name}.metrics.jsonl"))
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = threading.Lock()
+
+    class JsonFileMetricExporter(MetricExporter):
+        def export(self, metrics_data: Any, timeout_millis: float = 10_000, **kwargs: Any) -> Any:
+            records = _metrics_to_records(metrics_data)
+            if records:
+                with lock, path.open("a", encoding="utf-8") as handle:
+                    for record in records:
+                        handle.write(json.dumps(record, sort_keys=True))
+                        handle.write("\n")
+            return MetricExportResult.SUCCESS
+
+        def force_flush(self, timeout_millis: float = 10_000) -> bool:
+            return True
+
+        def shutdown(self, timeout_millis: float = 30_000, **kwargs: Any) -> None:
+            return None
+
+    # Delta temporality: each JSONL line shows activity since the previous export.
+    return JsonFileMetricExporter(
+        preferred_temporality={
+            Counter: AggregationTemporality.DELTA,
+            Histogram: AggregationTemporality.DELTA,
+        }
+    )
+
+
+def _metrics_to_records(metrics_data: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for resource_metrics in metrics_data.resource_metrics:
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                for point in metric.data.data_points:
+                    record: dict[str, Any] = {
+                        "name": metric.name,
+                        "unit": metric.unit,
+                        "time": point.time_unix_nano,
+                        "attributes": dict(point.attributes or {}),
+                    }
+                    if hasattr(point, "bucket_counts"):
+                        if not point.count:
+                            continue
+                        record.update(
+                            {
+                                "count": point.count,
+                                "sum": point.sum,
+                                "min": point.min,
+                                "max": point.max,
+                            }
+                        )
+                    else:
+                        record["value"] = point.value
+                    records.append(record)
+    return records
+
+
+class _NoopMeter:
+    def create_counter(self, *args: Any, **kwargs: Any) -> "_NoopInstrument":
+        return _NoopInstrument()
+
+    def create_histogram(self, *args: Any, **kwargs: Any) -> "_NoopInstrument":
+        return _NoopInstrument()
+
+    def create_observable_gauge(self, *args: Any, **kwargs: Any) -> "_NoopInstrument":
+        return _NoopInstrument()
+
+
+class _NoopInstrument:
+    def add(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def record(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class _NoopTracer:

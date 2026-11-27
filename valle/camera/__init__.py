@@ -18,6 +18,8 @@ from threading import Condition
 from ..observability import setup_observability
 
 
+from .. import telemetry
+
 log = logging.getLogger("valle.camera")
 
 
@@ -49,6 +51,7 @@ class _StreamingOutput(io.BufferedIOBase):
         with self.condition:
             self.frame = bytes(buf)
             self.condition.notify_all()
+        telemetry.record_camera_frame()
         return len(buf)
 
 

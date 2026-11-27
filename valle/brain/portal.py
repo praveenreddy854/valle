@@ -118,8 +118,8 @@ def _tail_count() -> int:
 
 
 def _is_portal_file(path: Path) -> bool:
-    return path.is_file() and (
-        path.name.endswith(".log") or path.name.endswith(".traces.jsonl")
+    return path.is_file() and path.name.endswith(
+        (".log", ".traces.jsonl", ".metrics.jsonl")
     )
 
 
@@ -150,10 +150,18 @@ def _file_summary(path: Path) -> dict[str, Any]:
     stat = path.stat()
     return {
         "name": path.name,
-        "kind": "traces" if path.name.endswith(".traces.jsonl") else "logs",
+        "kind": _file_kind(path.name),
         "size_bytes": stat.st_size,
         "updated_at": stat.st_mtime,
     }
+
+
+def _file_kind(name: str) -> str:
+    if name.endswith(".traces.jsonl"):
+        return "traces"
+    if name.endswith(".metrics.jsonl"):
+        return "metrics"
+    return "logs"
 
 
 def _masked_url(value: str) -> str:
@@ -390,6 +398,12 @@ _PORTAL_HTML = """
         const status = line.status?.status_code || "";
         const trace = line.context?.trace_id || "";
         return `${line.name} ${status} trace=${trace}\\n${JSON.stringify(line.attributes || {})}`;
+      }
+      if (line.name && line.unit !== undefined) {
+        const value = line.value !== undefined
+          ? line.value
+          : `count=${line.count} sum=${line.sum} min=${line.min} max=${line.max}`;
+        return `${line.name} ${value} ${line.unit}\\n${JSON.stringify(line.attributes || {})}`;
       }
       return JSON.stringify(line);
     }
