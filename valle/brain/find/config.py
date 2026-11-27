@@ -24,6 +24,15 @@ class FindConfig:
     # safety net if the brain dies mid-seek.
     seek_pulse_seconds: float = 4.0
 
+    # Map-guided seek (VALLE_SEEK_MODE=map): spin-scan at waypoints and let the
+    # vision LLM choose the next heading from the persistent room map.
+    seek_mode: str = "map"
+    # Pivot pulse that turns the car roughly 90 degrees. Tune per floor/battery.
+    seek_quarter_turn_seconds: float = 0.6
+    # Longest forward leg between waypoints.
+    seek_leg_seconds: float = 6.0
+    seek_planner_effort: str = "low"
+
     @classmethod
     def from_env(cls) -> "FindConfig":
         return cls(
@@ -45,6 +54,14 @@ class FindConfig:
             seek_pulse_seconds=_env_float(
                 "VALLE_SEEK_PULSE_SECONDS", cls.seek_pulse_seconds
             ),
+            seek_mode=os.getenv("VALLE_SEEK_MODE", cls.seek_mode).strip().lower(),
+            seek_quarter_turn_seconds=_env_float(
+                "VALLE_SEEK_QUARTER_TURN_SECONDS", cls.seek_quarter_turn_seconds
+            ),
+            seek_leg_seconds=_env_float("VALLE_SEEK_LEG_SECONDS", cls.seek_leg_seconds),
+            seek_planner_effort=os.getenv(
+                "VALLE_SEEK_PLANNER_EFFORT", cls.seek_planner_effort
+            ).strip().lower(),
         )
 
 

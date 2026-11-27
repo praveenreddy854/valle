@@ -173,7 +173,9 @@ class FindServer:
         response.pop("id", None)
         return response
 
-    def _seek_loop(self) -> SeekLoop:
+    def _seek_loop(self) -> Any:
+        if self._config.seek_mode == "map":
+            return self._map_seek()
         if self._seek is None:
             self._seek = SeekLoop(
                 brain_config=self._brain_config,
@@ -182,6 +184,36 @@ class FindServer:
                 depth=self._depth,
             )
         return self._seek
+
+    def _map_seek(self) -> Any:
+        if getattr(self, "_map", None) is None:
+            from ..agent.config import AgentConfig
+            from ..exploration import WaypointPlanner
+            from ..room_map import RoomMapStore
+            from ..vision import SceneInspector
+            from .explore import MapSeek
+
+            agent_config = AgentConfig.from_env()
+            try:
+                agent_config.validate()
+            except ValueError as exc:
+                raise RuntimeError(
+                    "map-guided seek needs an LLM provider; set the Azure or "
+                    f"Anthropic settings, or VALLE_SEEK_MODE=reflex ({exc})"
+                ) from exc
+            planner = WaypointPlanner(
+                SceneInspector.from_config(agent_config),
+                RoomMapStore.from_env(),
+                effort=self._config.seek_planner_effort,
+            )
+            self._map = MapSeek(
+                brain_config=self._brain_config,
+                find_config=self._config,
+                detector=self._detector,
+                depth=self._depth,
+                planner=planner,
+            )
+        return self._map
 
     def _capture_one(self) -> tuple[np.ndarray | None, float]:
         log.debug("capturing one frame from %s", self._config.camera_url)

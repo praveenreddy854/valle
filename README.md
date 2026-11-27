@@ -489,6 +489,31 @@ curl -X POST "http://127.0.0.1:8090/seek" \
   -d '{"object": "toy", "max_seconds": 30}'
 ```
 
+#### Map-guided seek
+
+By default seek explores with a room map instead of wandering. At each stop it:
+
+1. Pivots through four headings (ahead, right, behind, left) and runs the object detector on each view.
+2. Sends the four views and the room map to the vision LLM (your `VALLE_LLM_PROVIDER`). The LLM recognises a known place or records a new one, lists the open paths, and picks the next heading. It prefers openings that haven't been explored or searched for this object.
+3. Turns to that heading and drives forward with the depth reflex until the path closes, then stops for the next scan.
+
+Valle has only a camera, with no wheel encoders or IMU, so the map is a graph of landmark places and the headings that connect them, not a floor plan with distances. It's saved in `logs/room-map.json` and reused by later seeks.
+
+```bash
+curl    "http://127.0.0.1:8090/map"      # view the map
+curl -X DELETE "http://127.0.0.1:8090/map"  # reset it, e.g. after moving furniture
+```
+
+Map-guided seek needs an LLM provider. Each waypoint costs one vision call, which takes a few seconds while the motors are stopped. Set `VALLE_SEEK_MODE=reflex` to use the old wander-and-detect seek, which needs no LLM.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `VALLE_SEEK_MODE` | `map` | `map` (LLM-guided) or `reflex` (wander) |
+| `VALLE_SEEK_QUARTER_TURN_SECONDS` | `0.6` | Pivot pulse that turns about 90°. Tune for your floor and battery. |
+| `VALLE_SEEK_LEG_SECONDS` | `6` | Longest forward drive between waypoints |
+| `VALLE_SEEK_PLANNER_EFFORT` | `low` | Claude reasoning effort for the planner |
+| `VALLE_ROOM_MAP_FILE` | `logs/room-map.json` | Where the map is stored |
+
 Schedule a recurring mission (daily, 24-hour `HH:MM`):
 
 ```bash

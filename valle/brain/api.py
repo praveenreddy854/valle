@@ -192,6 +192,19 @@ def create_app(
             return _error("lesson not found", status=404)
         return jsonify({"ok": True, "removed": lesson_id})
 
+    @app.get("/map")
+    def room_map() -> Any:
+        from .room_map import RoomMapStore
+
+        return jsonify({"ok": True, "map": RoomMapStore.from_env().get()})
+
+    @app.delete("/map")
+    def reset_room_map() -> Any:
+        from .room_map import RoomMapStore
+
+        RoomMapStore.from_env().reset()
+        return jsonify({"ok": True, "reset": True})
+
     @app.get("/findings")
     def list_findings() -> Any:
         findings = [
