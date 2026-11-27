@@ -59,16 +59,26 @@ class SceneInspector:
         return cls(client, model)
 
     def inspect(self, image_bgr: Any, question: str) -> dict[str, Any]:
-        import cv2
+        return self.ask_json([image_bgr], question, schema=_SCHEMA, system=_SYSTEM)
 
-        ok, jpeg = cv2.imencode(".jpg", image_bgr)
-        if not ok:
-            raise RuntimeError("could not encode camera frame")
-        b64 = base64.b64encode(jpeg.tobytes()).decode()
+    def ask_json(
+        self,
+        images_bgr: list[Any],
+        prompt: str,
+        *,
+        schema: dict[str, Any],
+        system: str,
+        labels: list[str] | None = None,
+        effort: str | None = None,
+    ) -> dict[str, Any]:
+        """Send one or more camera frames plus a prompt; return the JSON object reply."""
+        encoded = [_encode_jpeg(image) for image in images_bgr]
         if self._provider == "anthropic":
-            text = self._inspect_anthropic(b64, question)
+            text = self._ask_anthropic(encoded, prompt, schema, system, labels, effort)
         else:
-            text = self._inspect_openai(b64, question)
+            # json_object mode has no schema parameter, so describe it in the prompt.
+            system = f"{system}\nReply with JSON matching this schema:\n{json.dumps(schema)}"
+            text = self._ask_openai(encoded, prompt, system, labels)
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
@@ -77,49 +87,68 @@ class SceneInspector:
             raise RuntimeError("vision model returned non-object JSON")
         return parsed
 
-    def _inspect_anthropic(self, b64: str, question: str) -> str:
+    def _ask_anthropic(
+        self,
+        encoded: list[str],
+        prompt: str,
+        schema: dict[str, Any],
+        system: str,
+        labels: list[str] | None,
+        effort: str | None,
+    ) -> str:
+        content: list[dict[str, Any]] = []
+        for index, b64 in enumerate(encoded):
+            if labels:
+                content.append({"type": "text", "text": labels[index]})
+            content.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                }
+            )
+        content.append({"type": "text", "text": prompt})
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if effort:
+            output_config["effort"] = effort
         # Server-side fallback re-runs a refused request on another Claude model.
         response = self._client.beta.messages.create(
             model=self._model,
             max_tokens=16000,
-            system=_SYSTEM,
+            system=system,
             betas=["server-side-fallback-2026-07-01"],
-            extra_body={
-                "fallbacks": "default",
-                "output_config": {"format": {"type": "json_schema", "schema": _SCHEMA}},
-            },
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-                        },
-                        {"type": "text", "text": question},
-                    ],
-                }
-            ],
+            extra_body={"fallbacks": "default", "output_config": output_config},
+            messages=[{"role": "user", "content": content}],
         )
         if response.stop_reason == "refusal":
             raise RuntimeError("vision model refused the request")
         return next((b.text for b in response.content if b.type == "text"), "")
 
-    def _inspect_openai(self, b64: str, question: str) -> str:
-        data_url = "data:image/jpeg;base64," + b64
+    def _ask_openai(
+        self, encoded: list[str], prompt: str, system: str, labels: list[str] | None
+    ) -> str:
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for index, b64 in enumerate(encoded):
+            if labels:
+                content.append({"type": "text", "text": labels[index]})
+            content.append(
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}
+            )
         response = self._client.chat.completions.create(
             model=self._model,
             temperature=0,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": _SYSTEM},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": question},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
             ],
         )
         return response.choices[0].message.content or ""
+
+
+def _encode_jpeg(image_bgr: Any) -> str:
+    import cv2
+
+    ok, jpeg = cv2.imencode(".jpg", image_bgr)
+    if not ok:
+        raise RuntimeError("could not encode camera frame")
+    return base64.b64encode(jpeg.tobytes()).decode()
