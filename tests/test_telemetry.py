@@ -78,6 +78,19 @@ class SeekTelemetryTest(unittest.TestCase):
         self.assertEqual(result["reason"], "blind")
         record.assert_called_once_with(found=False, reason="blind", seconds=2.0)
 
+    def test_seek_exception_is_recorded_and_reraised(self) -> None:
+        from unittest.mock import patch
+
+        from valle.brain.find import seek as seek_module
+
+        loop = seek_module.SeekLoop.__new__(seek_module.SeekLoop)
+        loop._run = Mock(side_effect=RuntimeError("depth model failed"))
+        with patch.object(seek_module.telemetry, "record_seek_result") as record:
+            with self.assertRaises(RuntimeError):
+                loop.run(object_query="box", max_seconds=30)
+        self.assertEqual(record.call_args.kwargs["reason"], "error")
+        self.assertFalse(record.call_args.kwargs["found"])
+
 
 if __name__ == "__main__":
     unittest.main()

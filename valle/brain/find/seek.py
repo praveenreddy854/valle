@@ -65,7 +65,15 @@ class SeekLoop:
         max_seconds: float,
         speed: float | None = None,
     ) -> dict[str, Any]:
-        result = self._run(object_query=object_query, max_seconds=max_seconds, speed=speed)
+        started = time.monotonic()
+        try:
+            result = self._run(object_query=object_query, max_seconds=max_seconds, speed=speed)
+        except Exception:
+            # Failed seeks still count toward outcome metrics.
+            telemetry.record_seek_result(
+                found=False, reason="error", seconds=time.monotonic() - started
+            )
+            raise
         reason = str(result.get("reason") or ("error" if result.get("error") else "unknown"))
         telemetry.record_seek_result(
             found=bool(result.get("found")),
