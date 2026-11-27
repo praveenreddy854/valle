@@ -11,6 +11,9 @@ class BrainConfig:
 
     tick_hz: float = 4.0
     grace_seconds: float = 2.0
+    # The Pi camera records on demand; allow it time to start before the
+    # blind grace window applies.
+    camera_warmup_seconds: float = 5.0
     request_timeout_seconds: float = 3.0
 
     session_max_seconds: float | None = None
@@ -50,6 +53,9 @@ class BrainConfig:
             camera_url=_env_str("VALLE_CAMERA_URL", cls.camera_url),
             tick_hz=_env_float("VALLE_BRAIN_TICK_HZ", cls.tick_hz),
             grace_seconds=_env_float("VALLE_BRAIN_GRACE_SECONDS", cls.grace_seconds),
+            camera_warmup_seconds=_env_float(
+                "VALLE_CAMERA_WARMUP_SECONDS", cls.camera_warmup_seconds
+            ),
             request_timeout_seconds=_env_float(
                 "VALLE_BRAIN_REQUEST_TIMEOUT", cls.request_timeout_seconds
             ),

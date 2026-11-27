@@ -57,6 +57,24 @@ class BrainPortalTest(unittest.TestCase):
         self.assertEqual(files["files"][0]["kind"], "metrics")
         self.assertEqual(tail["lines"][0]["value"], 2)
 
+    def test_camera_proxy_requests_capped_view(self) -> None:
+        from unittest.mock import MagicMock
+
+        from valle.brain.api import create_app
+
+        upstream = MagicMock()
+        upstream.headers = {"content-type": "multipart/x-mixed-replace; boundary=FRAME"}
+        upstream.iter_content.return_value = [b"--FRAME"]
+        with patch.dict(
+            os.environ,
+            {"VALLE_PORTAL_CAMERA_URL": "http://pi:8081/stream.mjpg", "VALLE_PORTAL_CAMERA_SECONDS": "60"},
+        ), patch("requests.get", return_value=upstream) as get:
+            response = create_app().test_client().get("/portal/camera.mjpg")
+            response.get_data()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(get.call_args.args[0], "http://pi:8081/stream.mjpg?max_seconds=60")
+
     def test_portal_rejects_path_traversal(self) -> None:
         try:
             from valle.brain.api import create_app

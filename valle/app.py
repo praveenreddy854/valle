@@ -302,7 +302,7 @@ def main() -> None:
     register_host_gauges("valle-pi")
     controller = app.config["VALLE_CONTROLLER"]
     _register_shutdown(controller)
-    camera = start_camera_server()
+    camera = start_camera_server(is_driving=controller.is_busy)
     try:
         app.run(host=config.host, port=config.port)
     finally:

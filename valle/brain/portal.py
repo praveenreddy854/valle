@@ -74,6 +74,10 @@ def create_portal_blueprint() -> Blueprint:
         except ImportError:
             return Response("requests is not installed", status=503)
 
+        # The Pi turns the camera on for this request and ends the stream after
+        # the cap, so a forgotten portal tab never keeps the camera running.
+        separator = "&" if "?" in camera_url else "?"
+        camera_url = f"{camera_url}{separator}max_seconds={_portal_view_seconds():g}"
         try:
             upstream = requests.get(camera_url, stream=True, timeout=(3, 10))
             upstream.raise_for_status()
@@ -106,6 +110,13 @@ def _camera_url() -> str:
         "VALLE_PORTAL_CAMERA_URL",
         os.getenv("VALLE_CAMERA_URL", "http://rpi.local:8081/stream.mjpg"),
     )
+
+
+def _portal_view_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("VALLE_PORTAL_CAMERA_SECONDS", "60")))
+    except ValueError:
+        return 60.0
 
 
 def _tail_count() -> int:
@@ -353,6 +364,7 @@ _PORTAL_HTML = """
         <button id="reloadCamera" type="button" title="Reconnect camera feed">Reconnect</button>
       </div>
       <img class="camera" id="camera" alt="Valle camera feed" src="/portal/camera.mjpg">
+      <p class="meta" id="cameraNote">The camera turns on for 1 minute per view. Click Reconnect to watch again.</p>
       <div class="status-grid">
         <div class="status-item">Camera source <span class="status-value" id="cameraUrl">-</span></div>
         <div class="status-item">OTLP endpoint <span class="status-value" id="otelEndpoint">unset</span></div>

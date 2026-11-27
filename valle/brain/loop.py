@@ -57,6 +57,7 @@ class Brain:
         self._stop_requested = False
         self._depth.load()
         self._frames.start()
+        self._frames.wait_for_frame(self._config.camera_warmup_seconds)
 
         try:
             session = self._client.start(

@@ -31,6 +31,18 @@ class ValleControllerTest(unittest.TestCase):
         self.assertEqual(status["last_stop_reason"], "auto_timeout")
         self.assertEqual(driver.current_action, "stopped")
 
+    def test_is_busy_while_driving_or_in_session(self) -> None:
+        controller = ValleController(MockMotorDriver(), default_duration_seconds=5)
+        self.assertFalse(controller.is_busy())
+        controller.run("forward")
+        self.assertTrue(controller.is_busy())
+        controller.run("stop")
+        self.assertFalse(controller.is_busy())
+        session = controller.start_autopilot()
+        self.assertTrue(controller.is_busy())
+        controller.stop_autopilot(session["session_id"])
+        self.assertFalse(controller.is_busy())
+
     def test_stop_overrides_active_command(self) -> None:
         driver = MockMotorDriver()
         controller = ValleController(driver, default_duration_seconds=5)

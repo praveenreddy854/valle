@@ -115,6 +115,11 @@ class ValleController:
     def driver_name(self) -> str:
         return self._driver.name
 
+    def is_busy(self) -> bool:
+        """True while motors are running or a motor session is open."""
+        with self._lock:
+            return self._active is not None or self._session is not None
+
     def autopilot_session_id(self) -> str | None:
         with self._lock:
             return self._session.session_id if self._session is not None else None
