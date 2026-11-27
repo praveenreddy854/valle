@@ -87,6 +87,7 @@ class MapSeek:
         self._detector.load()
         frames = self._frames_factory(self._brain.camera_url)
         frames.start()
+        frames.wait_for_frame(self._brain.camera_warmup_seconds)
         started = time.monotonic()
         self._deadline = started + max_seconds
         self._speed = speed

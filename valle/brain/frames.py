@@ -51,6 +51,17 @@ class FrameReader:
             self._thread.join(timeout=2.0)
             self._thread = None
 
+    def wait_for_frame(self, timeout_seconds: float) -> bool:
+        """Block until the first fresh frame arrives (camera warm-up), or time out."""
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self.latest() is not None:
+                return True
+            if self._stop_event.wait(0.1):
+                return False
+        log.warning("no camera frame within %.1fs of starting the stream", timeout_seconds)
+        return False
+
     def latest(self) -> Frame | None:
         with self._lock:
             frame = self._latest

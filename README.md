@@ -49,6 +49,16 @@ The Pi ground, the L298N ground and the battery's negative terminal must all be 
 
 The software already reverses motor direction to match the author's build (`valle/motors.py` swaps forward and backward). If `/forward` drives your car backward, swap the leads on OUT1/OUT2 and OUT3/OUT4. If only one wheel spins the wrong way, swap the leads on that motor only. Any pin can be remapped with the `VALLE_*_PIN` variables listed below.
 
+## Configuration file
+
+Copy the example and fill in the uncommented lines (Pi address, LLM provider and key, driving speeds):
+
+```bash
+cp .env.example .env
+```
+
+[`.env.example`](.env.example) lists every setting with its default. The brain (`make brain-api`) loads `.env` automatically. The Pi app (`make app`) doesn't, so set Pi settings with `export` on the Pi.
+
 ## Install on Raspberry Pi
 
 Valle requires Python 3.12. If you already have an older `.venv`, recreate it
@@ -229,7 +239,7 @@ open http://127.0.0.1:8090/portal
 
 The portal shows:
 
-- The Pi camera feed through the brain API at `/portal/camera.mjpg`.
+- The Pi camera feed through the brain API at `/portal/camera.mjpg`. Each view turns the camera on for 1 minute.
 - Available local log and trace files from `VALLE_LOG_DIR`.
 - Recent JSON log lines and OpenTelemetry span records.
 - The configured `OTEL_EXPORTER_OTLP_ENDPOINT`, with URL credentials masked.
@@ -277,8 +287,16 @@ sudo apt install -y python3-picamera2
 make app
 ```
 
-If picamera2 is not installed (e.g. when running off the Pi), the camera is
-skipped and the motor API still starts.
+If picamera2 is not installed (e.g. when running off the Pi) or no camera is
+detected, the camera is skipped with a warning and the motor API still starts.
+
+The camera is **off by default** and records only while something needs it:
+
+- **Driving:** any motor command or autopilot, agent or seek session turns it on.
+- **Stream clients:** anything connected to `/stream.mjpg` turns it on, such as the brain's seek, autopilot or agent missions, or the portal.
+- **Portal views:** each one is capped at 1 minute (`?max_seconds=60`). The stream then ends; click **Reconnect** to watch again.
+
+It turns off `VALLE_CAMERA_IDLE_SECONDS` (default 60) after driving stops and the last client disconnects. `GET /health` on the camera port reports `recording` and `clients`.
 
 | Environment variable | Default |
 | --- | --- |
@@ -287,8 +305,11 @@ skipped and the motor API still starts.
 | `VALLE_CAMERA_WIDTH` | `640` |
 | `VALLE_CAMERA_HEIGHT` | `480` |
 | `VALLE_CAMERA_FPS` | `10` |
+| `VALLE_CAMERA_IDLE_SECONDS` | `60` |
 
-Stream URL: `http://rpi.local:8081/stream.mjpg`.
+On the brain, seek and autopilot wait up to `VALLE_CAMERA_WARMUP_SECONDS` (default 5) for the first frame after the camera turns on. The portal's view length is `VALLE_PORTAL_CAMERA_SECONDS` (default 60).
+
+Stream URL: `http://rpi.local:8081/stream.mjpg`. Add `?max_seconds=N` to end the stream after N seconds.
 
 ### Pi side: autopilot endpoints
 

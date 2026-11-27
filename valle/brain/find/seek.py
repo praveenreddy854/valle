@@ -94,6 +94,7 @@ class SeekLoop:
 
         frames = FrameReader(self._brain.camera_url)
         frames.start()
+        frames.wait_for_frame(self._brain.camera_warmup_seconds)
         policy = ReflexPolicy(
             blocked_threshold=self._brain.blocked_threshold,
             hysteresis_margin=self._brain.hysteresis_margin,

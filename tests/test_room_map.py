@@ -158,6 +158,9 @@ class _Frames:
     def start(self) -> None: ...
     def stop(self) -> None: ...
 
+    def wait_for_frame(self, timeout_seconds: float) -> bool:
+        return True
+
     def latest(self):
         return self.frame
 
