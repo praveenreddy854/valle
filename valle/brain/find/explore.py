@@ -28,6 +28,10 @@ log = logging.getLogger("valle.brain.find.explore")
 _STEPS_RIGHT = {h: i for i, h in enumerate(HEADINGS)}
 
 
+class _Expired(Exception):
+    """The seek deadline passed before a motion session could start."""
+
+
 class MapSeek:
     def __init__(
         self,
@@ -61,7 +65,14 @@ class MapSeek:
     def run(
         self, *, object_query: str, max_seconds: float, speed: float | None = None
     ) -> dict[str, Any]:
-        result = self._run(object_query=object_query, max_seconds=max_seconds, speed=speed)
+        started = time.monotonic()
+        try:
+            result = self._run(object_query=object_query, max_seconds=max_seconds, speed=speed)
+        except Exception:
+            telemetry.record_seek_result(
+                found=False, reason="error", seconds=time.monotonic() - started
+            )
+            raise
         telemetry.record_seek_result(
             found=bool(result.get("found")),
             reason=str(result.get("reason") or "unknown"),
@@ -116,6 +127,9 @@ class MapSeek:
                     if plan.next_heading == "done":
                         result["reason"] = "explored"
                         break
+                    # The LLM call can use up the budget; never start motion after it.
+                    if self._expired():
+                        break
                     heading = (
                         plan.object_heading if plan.object_heading != "none" else plan.next_heading
                     )
@@ -123,9 +137,11 @@ class MapSeek:
                     if hit is not None:
                         result.update(found=True, reason="found", **hit)
                         break
-                    came_from, came_heading = plan.place_id, heading
+                    came_from, came_heading = plan.place_id, plan.to_place_frame(heading)
         except SessionRejectedError as exc:
             result["error"] = str(exc)
+        except _Expired:
+            pass
         finally:
             frames.stop()
         result.setdefault("reason", "max_seconds")
@@ -249,7 +265,9 @@ class MapSeek:
         return None
 
     def _start_session(self) -> str:
-        remaining = max(1.0, self._deadline - time.monotonic())
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise _Expired()
         session = self._client.start(
             max_seconds=min(remaining, self._brain.session_max_seconds or remaining),
             idle_seconds=self._brain.session_idle_seconds,

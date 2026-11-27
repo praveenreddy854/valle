@@ -116,12 +116,20 @@ def map_prompt(data: dict[str, Any]) -> str:
     places = data.get("places") or []
     if not places:
         return "The room map is empty: this is the first place recorded."
-    lines = ["Known places (id: summary | openings | explored | searched for):"]
+    lines = [
+        "Known places (id: summary | openings | explored | searched for), each "
+        "followed by what was seen in each heading of its stored frame:"
+    ]
     for place in places[-30:]:
         lines.append(
             f"- {place['id']}: {place['summary']} | openings={','.join(place['openings']) or '-'}"
             f" | explored={','.join(place['explored']) or '-'}"
             f" | searched_for={','.join(place['searched_for']) or '-'}"
+        )
+        views = place.get("views") or {}
+        lines.append(
+            "    views: "
+            + "; ".join(f"{h}={views.get(h) or '?'}" for h in HEADINGS)
         )
     links = data.get("links") or []
     if links:

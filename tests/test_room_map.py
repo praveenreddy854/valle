@@ -24,6 +24,7 @@ def _reply(**overrides):
         "views": VIEWS,
         "openings": ["ahead", "left"],
         "object_heading": "none",
+        "heading_offset": 0,
         "next_heading": "left",
         "reason": "door unexplored",
     }
@@ -91,6 +92,38 @@ class WaypointPlannerTest(unittest.TestCase):
         self.assertEqual(len(data["places"]), 2)
         self.assertIn({"from": start["id"], "heading": "right", "to": known["id"]}, data["links"])
 
+    def test_revisit_from_another_direction_converts_headings(self) -> None:
+        known = self.store.add_place(summary="kitchen", views=VIEWS, openings=["ahead", "right"])
+        # Robot now faces what was stored as "right": one clockwise quarter turn.
+        self.inspector.ask_json.return_value = _reply(
+            matched_place_id=known["id"], heading_offset=1, next_heading="ahead"
+        )
+        plan = WaypointPlanner(self.inspector, self.store).plan(
+            dict(VIEWS), "toy", came_from=None, came_heading=None
+        )
+        self.assertEqual(plan.heading_offset, 1)
+        self.assertEqual(plan.to_place_frame("ahead"), "right")
+        self.assertEqual(plan.to_place_frame("left"), "ahead")
+        # Leaving "ahead" now must mark the stored "right" explored, not "ahead".
+        nxt = self.store.add_place(
+            summary="hall", views=VIEWS, openings=[],
+            came_from=known["id"], came_heading=plan.to_place_frame("ahead"),
+        )
+        kitchen = next(p for p in self.store.get()["places"] if p["id"] == known["id"])
+        self.assertEqual(kitchen["explored"], ["right"])
+        self.assertIn({"from": known["id"], "heading": "right", "to": nxt["id"]}, self.store.get()["links"])
+
+    def test_new_place_ignores_offset_and_prompt_has_stored_views(self) -> None:
+        self.store.add_place(summary="kitchen", views=VIEWS, openings=[])
+        self.inspector.ask_json.return_value = _reply(heading_offset=2)
+        plan = WaypointPlanner(self.inspector, self.store).plan(
+            dict(VIEWS), "toy", came_from=None, came_heading=None
+        )
+        self.assertEqual(plan.heading_offset, 0)
+        prompt = self.inspector.ask_json.call_args.args[1]
+        self.assertIn("ahead=hall", prompt)
+        self.assertIn("left=door", prompt)
+
     def test_unknown_match_id_and_bad_heading_are_sanitised(self) -> None:
         self.inspector.ask_json.return_value = _reply(matched_place_id="zzz", next_heading="up")
         plan = WaypointPlanner(self.inspector, self.store).plan(
@@ -156,6 +189,40 @@ class MapSeekTest(unittest.TestCase):
         self.assertEqual(result["heading"], "right")
         planner.plan.assert_not_called()
         client.stop.assert_called()
+
+    def test_no_motion_after_planner_uses_up_deadline(self) -> None:
+        detector = Mock()
+        detector.detect.return_value = []
+        planner = Mock()
+        seek, client = self._seek(planner, detector)
+
+        def slow_plan(*args, **kwargs):
+            seek._deadline = 0.0  # the LLM call consumed the whole budget
+            return SimpleNamespace(
+                place_id="p1", is_new_place=True, summary="room", openings=["ahead"],
+                object_heading="none", next_heading="ahead", reason="go", heading_offset=0,
+                to_place_frame=lambda h: h,
+            )
+
+        planner.plan.side_effect = slow_plan
+        result = seek.run(object_query="toy", max_seconds=30)
+        self.assertEqual(result["reason"], "max_seconds")
+        self.assertEqual(client.start.call_count, 1)  # only the scan session
+        directions = [c.kwargs["direction"] for c in client.drive.call_args_list]
+        self.assertNotIn("forward", directions)
+
+    def test_seek_exception_records_error_outcome(self) -> None:
+        from unittest.mock import patch
+
+        from valle.brain.find import explore
+
+        detector = Mock()
+        detector.load.side_effect = RuntimeError("model download failed")
+        seek, _client = self._seek(Mock(), detector)
+        with patch.object(explore.telemetry, "record_seek_result") as record:
+            with self.assertRaises(RuntimeError):
+                seek.run(object_query="toy", max_seconds=30)
+        self.assertEqual(record.call_args.kwargs["reason"], "error")
 
     def test_explored_ends_after_planner_says_done(self) -> None:
         detector = Mock()

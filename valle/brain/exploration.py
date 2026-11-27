@@ -16,7 +16,14 @@ _SYSTEM = (
     "(a doorway, hallway, or floor gap the robot can drive through), and pick the "
     "next heading to explore. Prefer unexplored openings and areas not yet "
     "searched for this object; if the object is visible, say which heading. "
-    "Use 'done' only if every reachable opening has been explored."
+    "Use 'done' only if every reachable opening has been explored.\n"
+    "Headings in your reply (openings, object_heading, next_heading, views) "
+    "are relative to the robot's CURRENT scan. Each known place's views, "
+    "openings, and explored lists use the frame of that place's first visit. "
+    "If you match a known place, set heading_offset to how many 90-degree "
+    "clockwise turns the current 'ahead' is from that place's stored 'ahead' "
+    "(0-3; e.g. 1 if the current ahead shows what was stored as 'right'), and "
+    "use it to judge which current headings are already explored."
 )
 
 _SCHEMA = {
@@ -42,6 +49,12 @@ _SCHEMA = {
             "enum": [*HEADINGS, "none"],
             "description": "Heading where the searched object is visible, or none.",
         },
+        "heading_offset": {
+            "type": "integer",
+            "enum": [0, 1, 2, 3],
+            "description": "Clockwise quarter turns from the matched place's stored "
+            "ahead to the current ahead; 0 for a new place.",
+        },
         "next_heading": {"type": "string", "enum": [*HEADINGS, "done"]},
         "reason": {"type": "string"},
     },
@@ -51,6 +64,7 @@ _SCHEMA = {
         "views",
         "openings",
         "object_heading",
+        "heading_offset",
         "next_heading",
         "reason",
     ],
@@ -67,6 +81,17 @@ class WaypointPlan:
     object_heading: str
     next_heading: str
     reason: str
+    # Clockwise quarter turns from the place's stored "ahead" to the robot's
+    # current "ahead" (always 0 for a new place).
+    heading_offset: int = 0
+
+    def to_place_frame(self, heading: str) -> str:
+        """Convert a heading in the current scan to this place's stored frame."""
+        return rotate_heading(heading, self.heading_offset)
+
+
+def rotate_heading(heading: str, quarter_turns: int) -> str:
+    return HEADINGS[(HEADINGS.index(heading) + quarter_turns) % len(HEADINGS)]
 
 
 class WaypointPlanner:
@@ -102,6 +127,8 @@ class WaypointPlanner:
         known_ids = {p["id"] for p in data["places"]}
         matched = str(reply.get("matched_place_id") or "")
         openings = [h for h in reply.get("openings") or [] if h in HEADINGS]
+        offset = reply.get("heading_offset")
+        offset = offset if isinstance(offset, int) and 0 <= offset < 4 else 0
         if matched in known_ids:
             self._store.match_place(matched, searched_for=object_query)
             if came_from and came_heading:
@@ -116,7 +143,7 @@ class WaypointPlanner:
                 came_heading=came_heading,
                 searched_for=object_query,
             )
-            place_id, is_new = place["id"], True
+            place_id, is_new, offset = place["id"], True, 0
 
         next_heading = str(reply.get("next_heading") or "done")
         if next_heading not in (*HEADINGS, "done"):
@@ -130,4 +157,5 @@ class WaypointPlanner:
             object_heading=object_heading if object_heading in HEADINGS else "none",
             next_heading=next_heading,
             reason=str(reply.get("reason") or ""),
+            heading_offset=offset,
         )
